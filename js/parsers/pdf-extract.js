@@ -65,6 +65,23 @@
     return cells.filter(function (c) { return c.text !== ''; });
   }
 
+  function fieldForHeaderText(text, matchField) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    let f = matchField(normalized);
+    // Vault web-client BOM PDFs label the file column as "Name". In generic
+    // spreadsheets "Name" can mean title, but in this layout the data under
+    // it is the Inventor filename (.iam/.ipt), which is valuable for assembly
+    // detection and indentation-based hierarchy.
+    if (!f && /^name$/i.test(normalized)) f = 'file';
+    if (f === 'title' && /^name$/i.test(normalized)) f = 'file';
+    // The rightmost header can arrive as "Part", "Number", "Part Number", or
+    // as one text item containing a newline between the words.
+    if (!f && /\bpart\b/i.test(normalized) && /\bnumber\b/i.test(normalized)) f = 'number';
+    if (!f && /^part$/i.test(normalized)) f = 'part-fragment';
+    if (!f && /^number$/i.test(normalized)) f = 'number-fragment';
+    return f;
+  }
+
   function findHeaderCells(cells, matchField) {
     let matches = 0;
     const fields = [];
@@ -129,13 +146,17 @@
       });
       const lines = clusterLines(runs);
 
-      for (const line of lines) {
-        const cells = lineCells(line, 7);
+      for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        const line = lines[lineIndex];
+        let cells = lineCells(line, 7);
         if (!cells.length) continue;
 
         if (!header) {
-          const fields = findHeaderCells(cells, matchField);
+          const nextCells = lineIndex + 1 < lines.length ? lineCells(lines[lineIndex + 1], 7) : [];
+          const headerCells = mergedHeaderCells(cells, nextCells, matchField);
+          const fields = buildHeaderFromCells(headerCells, matchField);
           if (fields && fields.indexOf('number') !== -1) {
+            cells = headerCells;
             const centers = cells.map(function (c) { return (c.x + c.end) / 2; });
             const boundaries = [];
             for (let i = 1; i < centers.length; i++) boundaries.push((centers[i - 1] + centers[i]) / 2);
