@@ -69,11 +69,33 @@
     let matches = 0;
     const fields = [];
     for (const c of cells) {
-      const f = matchField(c.text);
+      let f = matchField(c.text);
+      // Vault web-client BOM PDFs label the file column as "Name". In generic
+      // spreadsheets "Name" can mean title, but in this layout the data under
+      // it is the Inventor filename (.iam/.ipt), which is valuable for assembly
+      // detection and indentation-based hierarchy.
+      if (!f && /^name$/i.test(c.text)) f = 'file';
+      if (f === 'title' && /^name$/i.test(c.text)) f = 'file';
+      // The rightmost header commonly wraps as two visual lines: "Part" on the
+      // header line and "Number" below it. Treat the "Part" cell as the part
+      // number column so the table is recognized from the first header line.
+      if (!f && /^part$/i.test(c.text)) f = 'number';
       fields.push(f);
       if (f) matches++;
     }
     return matches >= 2 ? fields : null;
+  }
+
+  function completePartNumber(s) {
+    s = (s || '').replace(/\s+/g, '').trim();
+    return /^[A-Z0-9]+(?:-[A-Z0-9]+)+$/i.test(s) && !/-$/.test(s);
+  }
+
+  function joinCellContinuation(prev, next, isNumber) {
+    if (!prev) return next;
+    if (!next) return prev;
+    if (isNumber) return /-$/.test(prev) ? prev + next : prev + ' ' + next;
+    return prev + ' ' + next;
   }
 
   /**
@@ -119,10 +141,14 @@
             for (let i = 1; i < centers.length; i++) boundaries.push((centers[i - 1] + centers[i]) / 2);
             const textCols = new Set();
             fields.forEach(function (f, i) {
-              if (f === 'title' || f === 'description' || f === 'file') textCols.add(i);
+              if (f === 'title' || f === 'description' || f === 'file' || f === 'number') textCols.add(i);
             });
             header = {
-              labels: cells.map(function (c) { return c.text; }),
+              labels: cells.map(function (c, i) {
+                if (fields[i] === 'number' && /^part$/i.test(c.text)) return 'Part Number';
+                if (fields[i] === 'file' && /^name$/i.test(c.text)) return 'File';
+                return c.text;
+              }),
               centers: centers,
               boundaries: boundaries,
               fields: fields,
@@ -135,9 +161,11 @@
           continue; // ignore everything above/without a header
         }
 
-        // skip repeated page headers
+        // skip repeated page headers and second-line wrapped header labels such as
+        // the standalone "Number" underneath "Part" in Vault's "Part Number".
         const hf = findHeaderCells(cells, matchField);
         if (hf && hf.indexOf('number') !== -1) continue;
+        if (cells.length === 1 && /^number$/i.test(cells[0].text)) continue;
 
         // assign cells to columns by center x
         const rowArr = new Array(header.labels.length).fill('');
@@ -152,6 +180,17 @@
 
         const hasNumber = rowArr[header.numberCol] !== '';
         const hasQty = header.qtyCol >= 0 && rowArr[header.qtyCol] !== '';
+
+        const onlyContinuationCols = colsHit.every(function (c) { return header.textCols.has(c); });
+        const numberLooksComplete = !hasNumber || completePartNumber(rowArr[header.numberCol]);
+        if (rows.length > 1 && onlyContinuationCols && (!hasNumber || !numberLooksComplete)) {
+          const prev = rows[rows.length - 1];
+          for (const c of colsHit) {
+            prev[c] = joinCellContinuation(prev[c], rowArr[c], c === header.numberCol);
+          }
+          continue;
+        }
+
         if (!hasNumber && !hasQty) {
           // wrapped continuation of the previous row — but only if all its
           // content sits in text columns; otherwise it's a footer/noise line

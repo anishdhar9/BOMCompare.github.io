@@ -10,7 +10,7 @@ computer — there is no server and no upload.
 
 ## Usage
 
-1. Open the page (see *Deployment* below, or just open `index.html` locally).
+1. Open **https://BOMCompare.github.io/** (or just open `index.html` locally).
 2. Drop the **CAD BOM** on the left box, the **Item Master BOM** export on the right box.
 3. Click **Compare BOMs**.
 4. Review the three result tabs, hide/show columns as needed, filter, and download the
@@ -84,6 +84,11 @@ arguments to run the full baseline assertions.
 
 ## Deployment
 
-The site is plain static files with relative paths, so it can be served from any static
-host or GitHub Pages configuration (repo Pages, user Pages, or a custom domain):
-**Settings → Pages → Deploy from a branch**, select the default branch and `/ (root)`.
+The production site is intended to be served directly at **https://BOMCompare.github.io/**.
+
+All asset URLs are relative, so the same files also work when opened locally or deployed from
+any static host. For GitHub Pages, configure this repository to publish from the branch root:
+**Settings → Pages → Deploy from a branch**, select the default branch and `/ (root)`. If the
+repository remains under a user/organization account such as `anishdhar9`, add the appropriate
+GitHub Pages custom-domain/CNAME configuration so users access `BOMCompare.github.io` rather
+than `anishdhar9.github.io/BOMCompare.github.io`.
