@@ -98,6 +98,32 @@ console.log('\n== synthetic: indentation-based levels ==');
   check('indent level values', cad.items.map(i => i.level).join(',') === '1,2,2,1', cad.items.map(i => i.level));
 }
 
+
+console.log('\n== synthetic: Vault PDF table reconstruction ==');
+{
+  const { pdfExtract } = require(path.join(rootDir, 'js/parsers/pdf-extract.js'));
+  global.BOMCompare = { cadLeveledParser };
+  const mk = (str, x, y, w = 30, h = 8) => ({ str, transform: [1, 0, 0, h, x, y], width: w });
+  const items = [
+    mk('Name', 33, 700), mk('Revision', 292, 700), mk('State', 355, 700), mk('Title', 438, 700), mk('Description', 642, 700), mk('Part', 825, 700),
+    mk('Number', 825, 690),
+    mk('7-230-20509.iam', 64, 650, 120), mk('1', 292, 650), mk('Released', 371, 650), mk('MAIN GRANULATOR_HSG PRO', 438, 650, 165), mk('SPN016823_PN22426_SUN', 642, 650, 170), mk('7-230-', 825, 650, 45),
+    mk('PILOT', 438, 640, 40), mk('PHARMACEUTICALS LTD,', 642, 640, 150), mk('20509', 825, 640, 40),
+    mk('7-099-200063.iam', 78, 610, 120), mk('0', 292, 610), mk('Released', 371, 610), mk('REDUCER 4” TO 2”', 438, 610, 120), mk('WITH CLAMP ASSEMBLY', 642, 610, 150), mk('7-099-', 825, 610, 45),
+    mk('200063', 825, 600, 45),
+    mk('7-999-00044I00.ipt', 91, 570, 130), mk('0', 292, 570), mk('Released', 371, 570), mk('TC CLAMP - 4”', 438, 570, 100), mk('BS 4825 - 211057 - CLAMP', 642, 570, 170), mk('7-999-', 825, 570, 45),
+    mk('00044', 825, 560, 40),
+  ];
+  const pdfjsLib = { getDocument: () => ({ promise: Promise.resolve({ numPages: 1, getPage: async () => ({ getTextContent: async () => ({ items }) }) }) }) };
+  const grid = await pdfExtract.extractGrid(new ArrayBuffer(0), { pdfjsLib });
+  check('PDF grid recognizes wrapped Part Number header', grid.rows[0][5] === 'Part Number', grid.rows[0]);
+  check('PDF grid merges wrapped part numbers', grid.rows[1][5] === '7-230-20509' && grid.rows[2][5] === '7-099-200063', grid.rows.slice(1));
+  const cad = cadLeveledParser.parse(grid.rows, { indents: grid.indents, source: 'pdf' });
+  check('PDF CAD parses rows', cad && cad.items.length === 3, cad && cad.items.map(i => i.number));
+  check('PDF Name column becomes file column', cad.items[0].file === '7-230-20509.iam' && cad.items[0].isAssembly === true, cad.items[0]);
+  check('PDF indentation infers levels', cad.hasLevels === true && cad.items.map(i => i.level).join(',') === '1,2,3', cad && cad.items.map(i => i.level));
+}
+
 /* ---------------- real-sample baseline tests ---------------- */
 
 const [cadPath, imPath] = process.argv.slice(2);

@@ -65,15 +65,82 @@
     return cells.filter(function (c) { return c.text !== ''; });
   }
 
+  function fieldForHeaderText(text, matchField) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    let f = matchField(normalized);
+    // Vault web-client BOM PDFs label the file column as "Name". In generic
+    // spreadsheets "Name" can mean title, but in this layout the data under
+    // it is the Inventor filename (.iam/.ipt), which is valuable for assembly
+    // detection and indentation-based hierarchy.
+    if (!f && /^name$/i.test(normalized)) f = 'file';
+    if (f === 'title' && /^name$/i.test(normalized)) f = 'file';
+    // The rightmost header can arrive as "Part", "Number", "Part Number", or
+    // as one text item containing a newline between the words.
+    if (!f && /\bpart\b/i.test(normalized) && /\bnumber\b/i.test(normalized)) f = 'number';
+    if (!f && /^part$/i.test(normalized)) f = 'part-fragment';
+    if (!f && /^number$/i.test(normalized)) f = 'number-fragment';
+    return f;
+  }
+
   function findHeaderCells(cells, matchField) {
     let matches = 0;
     const fields = [];
     for (const c of cells) {
-      const f = matchField(c.text);
+      let f = fieldForHeaderText(c.text, matchField);
+      if (f === 'part-fragment') f = 'number';
+      if (f === 'number-fragment') f = 'number';
       fields.push(f);
       if (f) matches++;
     }
     return matches >= 2 ? fields : null;
+  }
+
+  function buildHeaderFromCells(cells, matchField) {
+    const rawFields = cells.map(function (c) { return fieldForHeaderText(c.text, matchField); });
+    const fields = rawFields.map(function (f) {
+      if (f === 'part-fragment' || f === 'number-fragment') return 'number';
+      return f;
+    });
+    const matches = fields.filter(Boolean).length;
+    if (matches < 2 || fields.indexOf('number') === -1) return null;
+    return fields;
+  }
+
+  function mergedHeaderCells(primary, secondary, matchField) {
+    const merged = primary.map(function (c) { return { text: c.text, x: c.x, end: c.end }; });
+    const primaryRaw = merged.map(function (c) { return fieldForHeaderText(c.text, matchField); });
+
+    for (const s of secondary || []) {
+      const sf = fieldForHeaderText(s.text, matchField);
+      if (sf !== 'number-fragment') continue;
+      let best = -1;
+      let bestDistance = Infinity;
+      for (let i = 0; i < merged.length; i++) {
+        const pf = primaryRaw[i];
+        const distance = Math.abs(((merged[i].x + merged[i].end) / 2) - ((s.x + s.end) / 2));
+        if ((pf === 'part-fragment' || /\bpart\b/i.test(merged[i].text)) && distance < bestDistance) {
+          best = i;
+          bestDistance = distance;
+        }
+      }
+      if (best >= 0 && bestDistance <= 35) {
+        merged[best].text = (merged[best].text + ' ' + s.text).replace(/\s+/g, ' ').trim();
+        merged[best].end = Math.max(merged[best].end, s.end);
+      }
+    }
+    return merged;
+  }
+
+  function completePartNumber(s) {
+    s = (s || '').replace(/\s+/g, '').trim();
+    return /^[A-Z0-9]+(?:-[A-Z0-9]+)+$/i.test(s) && !/-$/.test(s);
+  }
+
+  function joinCellContinuation(prev, next, isNumber) {
+    if (!prev) return next;
+    if (!next) return prev;
+    if (isNumber) return /-$/.test(prev) ? prev + next : prev + ' ' + next;
+    return prev + ' ' + next;
   }
 
   /**
@@ -107,22 +174,30 @@
       });
       const lines = clusterLines(runs);
 
-      for (const line of lines) {
-        const cells = lineCells(line, 7);
+      for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        const line = lines[lineIndex];
+        let cells = lineCells(line, 7);
         if (!cells.length) continue;
 
         if (!header) {
-          const fields = findHeaderCells(cells, matchField);
+          const nextCells = lineIndex + 1 < lines.length ? lineCells(lines[lineIndex + 1], 7) : [];
+          const headerCells = mergedHeaderCells(cells, nextCells, matchField);
+          const fields = buildHeaderFromCells(headerCells, matchField);
           if (fields && fields.indexOf('number') !== -1) {
+            cells = headerCells;
             const centers = cells.map(function (c) { return (c.x + c.end) / 2; });
             const boundaries = [];
             for (let i = 1; i < centers.length; i++) boundaries.push((centers[i - 1] + centers[i]) / 2);
             const textCols = new Set();
             fields.forEach(function (f, i) {
-              if (f === 'title' || f === 'description' || f === 'file') textCols.add(i);
+              if (f === 'title' || f === 'description' || f === 'file' || f === 'number') textCols.add(i);
             });
             header = {
-              labels: cells.map(function (c) { return c.text; }),
+              labels: cells.map(function (c, i) {
+                if (fields[i] === 'number' && /^part(?:\s+number)?$/i.test(c.text)) return 'Part Number';
+                if (fields[i] === 'file' && /^name$/i.test(c.text)) return 'File';
+                return c.text;
+              }),
               centers: centers,
               boundaries: boundaries,
               fields: fields,
@@ -135,9 +210,11 @@
           continue; // ignore everything above/without a header
         }
 
-        // skip repeated page headers
+        // skip repeated page headers and second-line wrapped header labels such as
+        // the standalone "Number" underneath "Part" in Vault's "Part Number".
         const hf = findHeaderCells(cells, matchField);
         if (hf && hf.indexOf('number') !== -1) continue;
+        if (cells.length === 1 && /^number$/i.test(cells[0].text)) continue;
 
         // assign cells to columns by center x
         const rowArr = new Array(header.labels.length).fill('');
@@ -152,6 +229,17 @@
 
         const hasNumber = rowArr[header.numberCol] !== '';
         const hasQty = header.qtyCol >= 0 && rowArr[header.qtyCol] !== '';
+
+        const onlyContinuationCols = colsHit.every(function (c) { return header.textCols.has(c); });
+        const numberLooksComplete = !hasNumber || completePartNumber(rowArr[header.numberCol]);
+        if (rows.length > 1 && onlyContinuationCols && (!hasNumber || !numberLooksComplete)) {
+          const prev = rows[rows.length - 1];
+          for (const c of colsHit) {
+            prev[c] = joinCellContinuation(prev[c], rowArr[c], c === header.numberCol);
+          }
+          continue;
+        }
+
         if (!hasNumber && !hasQty) {
           // wrapped continuation of the previous row — but only if all its
           // content sits in text columns; otherwise it's a footer/noise line
