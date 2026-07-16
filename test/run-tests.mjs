@@ -2,11 +2,12 @@
  * Node smoke tests for the parsers + comparison logic.
  *
  * Usage:
- *   node test/run-tests.mjs [path/to/CAD_Bom.xlsx path/to/Item_Master_BOM.xls]
+ *   node test/run-tests.mjs [CAD_Bom.xlsx Item_Master_BOM.xls [Vault_723.pdf Vault_732.pdf Inventor_732.xlsx]]
  *
- * The two real sample exports are NOT committed (BOM data may be sensitive).
- * Without arguments only the synthetic tests run; with the two sample files
- * the full baseline assertions run as well.
+ * The real sample exports are NOT committed (BOM data may be sensitive).
+ * Without arguments only the synthetic tests run; with the sample files the
+ * full baseline assertions run as well. The PDF tests additionally need
+ * `npm install` (pdfjs-dist, pinned to the vendored pdf.js version).
  */
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
@@ -17,7 +18,7 @@ const require = createRequire(import.meta.url);
 const rootDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 const XLSX = require(path.join(rootDir, 'vendor/xlsx.full.min.js'));
-const { compare, countDescendants, indexItemMaster } = require(path.join(rootDir, 'js/compare.js'));
+const { compare, compareAll, countDescendants, indexItemMaster, normNumber } = require(path.join(rootDir, 'js/compare.js'));
 const { itemMasterParser } = require(path.join(rootDir, 'js/parsers/itemmaster.js'));
 const { cadFlatParser } = require(path.join(rootDir, 'js/parsers/cad-flat-xlsx.js'));
 const { cadLeveledParser } = require(path.join(rootDir, 'js/parsers/cad-leveled.js'));
@@ -124,9 +125,61 @@ console.log('\n== synthetic: Vault PDF table reconstruction ==');
   check('PDF indentation infers levels', cad.hasLevels === true && cad.items.map(i => i.level).join(',') === '1,2,3', cad && cad.items.map(i => i.level));
 }
 
+/* ---------------- synthetic: dual-source reference detection ---------------- */
+
+console.log('\n== synthetic: reference items (structure vs intended BOM) ==');
+{
+  // structure = full CAD incl. reference; bom = intended BOM with qty
+  const structureAoa = [
+    ['Item', 'Number', 'Title', 'File'],
+    ['1', 'MACH-01', 'Machine', 'mach.iam'],
+    ['1.1', 'REF-1', 'Reference part', 'r1.ipt'],
+    ['1.2', 'REF-ASSY', 'Reference assembly', 'ra.iam'],
+    ['1.2.1', 'REF-CHILD', 'Its child', 'rc.ipt'],
+    ['1.3', 'PART-A', 'Part A', 'pa.ipt'],
+  ];
+  const bomAoa = [
+    ['Item', 'Number', 'Title', 'QTY', 'BOM Structure'],
+    ['1', 'PART-A', 'Part A', '3', 'Normal'],
+    ['2', 'VIRT-1', 'Virtual part (no CAD file)', '1', 'Normal'],
+  ];
+  const structure = cadLeveledParser.parse(structureAoa, { source: 'pdf' });
+  const bom = cadLeveledParser.parse(bomAoa, { source: 'leveled-sheet' });
+  check('bom export captures BOM Structure', bom.hasStructure === true && bom.items[0].bomStructure === 'Normal');
+  const im = {
+    rows: [
+      { number: 'MACH-01', title: '', qty: null, path: [] },
+      { number: 'PART-A', title: '', qty: 3, path: ['1'] },
+      { number: 'REF-1', title: '', qty: 1, path: ['2'] }, // reference that DID reach the IM
+    ],
+  };
+  const res = compareAll([structure, bom], im);
+  check('reference roots = REF-1 + REF-ASSY (root machine excluded)', res.referenceRoots.length === 2,
+    res.referenceRoots.map(n => n.item.number));
+  const refAssy = res.referenceRoots.find(n => n.item.number === 'REF-ASSY');
+  check('REF-ASSY groups its child', refAssy && countDescendants(refAssy) === 1);
+  const ref1 = res.referenceRoots.find(n => n.item.number === 'REF-1');
+  check('reference annotated with IM presence', ref1 && ref1.inItemMaster === true && refAssy.inItemMaster === false);
+  check('referenceTotal = 3 unique PNs', res.referenceTotal === 3, res.referenceTotal);
+  check('virtual part missing from IM appended standalone', res.missingRoots.some(n => n.item.number === 'VIRT-1'),
+    res.missingRoots.map(n => n.item.number));
+  check('qty taken from bom source', res.hasQty === true);
+}
+
 /* ---------------- real-sample baseline tests ---------------- */
 
-const [cadPath, imPath] = process.argv.slice(2);
+const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path] = process.argv.slice(2);
+let pdfjsLib = null;
+try { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); } catch (e) { /* npm install to enable PDF tests */ }
+
+async function parsePdf(file) {
+  const { pdfExtract } = require(path.join(rootDir, 'js/parsers/pdf-extract.js'));
+  const buf = new Uint8Array(fs.readFileSync(file)).buffer;
+  const grid = await pdfExtract.extractGrid(buf, { pdfjsLib });
+  const parsed = cadLeveledParser.parse(grid.rows, { indents: grid.indents, source: 'pdf' });
+  return { grid, parsed };
+}
+
 if (cadPath && imPath) {
   console.log('\n== real samples: parsing ==');
   const cadWb = XLSX.read(fs.readFileSync(cadPath), { type: 'buffer' });
@@ -181,6 +234,66 @@ if (cadPath && imPath) {
   }
 } else {
   console.log('\n(no sample file paths given — skipped real-sample baseline tests)');
+}
+
+if (pdf723Path && imPath && cadPath) {
+  if (!pdfjsLib) {
+    console.log('\n(pdfjs-dist not installed — run `npm install` to enable the PDF baseline tests)');
+  } else {
+    console.log('\n== real samples: Vault PDF 7-230-20509 (64 pages) vs Item Master ==');
+    const { parsed: p723 } = await parsePdf(pdf723Path);
+    check('723 PDF parsed 1820 records', p723.items.length === 1820, p723.items.length);
+    check('723 PDF has levels, no qty', p723.hasLevels === true && p723.hasQty === false);
+    const badPn = p723.items.filter(i => !/^\d-\d{3}-\S+$/.test(i.number));
+    check('723 PDF: every record has a clean part number', badPn.length === 0, badPn.slice(0, 3).map(i => i.number));
+
+    const imWb2 = XLSX.read(fs.readFileSync(imPath), { type: 'buffer' });
+    const im2 = detect.parseItemMasterFromWorkbook(imWb2, XLSX);
+    const cadWb2 = XLSX.read(fs.readFileSync(cadPath), { type: 'buffer' });
+    const flat2 = detect.parseCadFromWorkbook(cadWb2, XLSX).ok;
+    const flatPNs = new Set(flat2.items.map(i => normNumber(i.number)));
+    const pdfPNs = new Set(p723.items.map(i => normNumber(i.number)));
+    const flatNotInPdf = [...flatPNs].filter(pn => !pdfPNs.has(pn));
+    check('723 PDF covers every PN of the flat export', flatNotInPdf.length === 0, flatNotInPdf.slice(0, 5));
+
+    const res723 = compareAll([p723], im2);
+    check('723 PDF vs IM: 183 missing PNs', res723.missingTotal === 183, res723.missingTotal);
+    check('723 PDF vs IM: 18 actionable findings', res723.actionableCount === 18, res723.actionableCount);
+    const wetMill = res723.missingRoots.find(n => n.item.number === '7-260-20736');
+    check('WET MILL is one grouped finding with 165 descendants', wetMill && countDescendants(wetMill) === 165,
+      wetMill && countDescendants(wetMill));
+
+    if (pdf732Path && inv732Path) {
+      console.log('\n== real samples: Vault PDF 7-320-20066 + Inventor BOM export (reference detection) ==');
+      const { parsed: p732 } = await parsePdf(pdf732Path);
+      check('732 PDF parsed 639 records', p732.items.length === 639, p732.items.length);
+      const invWb = XLSX.read(fs.readFileSync(inv732Path), { type: 'buffer' });
+      const inv = detect.parseCadFromWorkbook(invWb, XLSX).ok;
+      check('Inventor export parsed as leveled sheet', !!inv && inv.source === 'leveled-sheet', inv && inv.source);
+      check('Inventor export: 608 items, qty + levels + BOM Structure',
+        inv.items.length === 608 && inv.hasQty === true && inv.hasLevels === true && inv.hasStructure === true,
+        inv && { n: inv.items.length, q: inv.hasQty, l: inv.hasLevels, s: inv.hasStructure });
+
+      // no Item Master exists for this machine in the samples; reference
+      // detection is independent of the IM, so a stub built from the
+      // Inventor export is enough to drive compareAll.
+      const stubIm = { rows: inv.items.map(it => ({ number: it.number, title: it.title, description: '', qty: it.qty, path: null, rowType: '', sourceRow: it.sourceRow })) };
+      const res732 = compareAll([p732, inv], stubIm);
+      check('732: 19 unique reference components', res732.referenceTotal === 19, res732.referenceTotal);
+      check('732: reference findings grouped into 12 roots', res732.referenceRoots.length === 12, res732.referenceRoots.length);
+      check('732: HUMAN mannequin detected as reference', res732.referenceRoots.some(n => n.item.number === '7-240-00000'),
+        res732.referenceRoots.map(n => n.item.number));
+      check('732: qty comparison active via Inventor export', res732.hasQty === true);
+      console.log('\nReference components (' + res732.referenceTotal + ' in ' + res732.referenceRoots.length + ' findings):');
+      for (const n of res732.referenceRoots) {
+        const d = countDescendants(n);
+        console.log('  L' + n.item.level + ' ' + n.item.number.padEnd(16) + String(n.item.title).slice(0, 42).padEnd(44) +
+          (d ? ' +' + d + ' children' : ''));
+      }
+    }
+  }
+} else if (pdf723Path || pdf732Path) {
+  console.log('\n(PDF tests need the flat CAD xlsx + Item Master paths as the first two arguments)');
 }
 
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nall tests passed');

@@ -1,0 +1,11 @@
+{
+  "name": "bomcompare",
+  "private": true,
+  "description": "Client-side BOM comparison tool (CAD BOM vs Item Master). The app itself uses the vendored libraries in vendor/; npm packages are for Node tests only.",
+  "scripts": {
+    "test": "node test/run-tests.mjs"
+  },
+  "devDependencies": {
+    "pdfjs-dist": "3.11.174"
+  }
+}
