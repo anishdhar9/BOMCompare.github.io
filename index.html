@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BOM Compare — CAD BOM vs Item Master</title>
+  <meta name="description" content="Compare a CAD BOM against the Item Master BOM to catch parts that were accidentally left as BOM Reference and would never be ordered.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%99%EF%B8%8F%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="wrap">
+      <h1>BOM Compare</h1>
+      <p class="tagline">CAD BOM vs Item Master — find parts stuck in “BOM Reference” before they fail to get ordered.</p>
+      <p class="privacy">🔒 Everything runs in your browser. No file ever leaves your computer.</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="uploads">
+      <div class="dropzone" id="zone-cad" data-role="cad" tabindex="0">
+        <input type="file" id="file-cad" accept=".pdf,.xlsx,.xls,.csv" hidden>
+        <div class="dz-inner">
+          <div class="dz-icon">📐</div>
+          <h2>CAD BOM</h2>
+          <p class="dz-hint">Multi-level BOM PDF from Vault, or the Vault Excel paste (.pdf, .xlsx, .xls, .csv)</p>
+          <p class="dz-file" id="status-file-cad"></p>
+          <div class="dz-chips" id="status-chips-cad"></div>
+          <p class="dz-error" id="status-error-cad"></p>
+          <button type="button" class="btn btn-small" id="pick-cad">Choose file</button>
+        </div>
+      </div>
+
+      <div class="dropzone" id="zone-im" data-role="im" tabindex="0">
+        <input type="file" id="file-im" accept=".xlsx,.xls" hidden>
+        <div class="dz-inner">
+          <div class="dz-icon">🗄️</div>
+          <h2>Item Master BOM</h2>
+          <p class="dz-hint">Vault / ERP item BOM export (.xls, .xlsx)</p>
+          <p class="dz-file" id="status-file-im"></p>
+          <div class="dz-chips" id="status-chips-im"></div>
+          <p class="dz-error" id="status-error-im"></p>
+          <button type="button" class="btn btn-small" id="pick-im">Choose file</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="mapping hidden" id="mapping-panel">
+      <h2>Assign columns</h2>
+      <p>The CAD BOM's columns couldn't be identified automatically. Tell me which column holds each field (only Part Number is required):</p>
+      <div class="mapping-fields" id="mapping-fields"></div>
+      <div class="mapping-preview-scroll">
+        <table class="mapping-preview" id="mapping-preview"></table>
+      </div>
+      <button type="button" class="btn btn-primary" id="mapping-apply">Apply mapping</button>
+    </section>
+
+    <section class="actions">
+      <button type="button" class="btn btn-primary btn-big" id="btn-compare" disabled>Compare BOMs</button>
+    </section>
+
+    <section class="notices" id="notices"></section>
+
+    <section class="results hidden" id="results">
+      <div class="summary" id="summary"></div>
+
+      <div class="toolbar">
+        <nav class="tabs" id="tabs">
+          <button class="tab active" data-tab="missing">Missing from Item Master <span class="count" id="count-missing"></span></button>
+          <button class="tab" data-tab="qty">Quantity mismatches <span class="count" id="count-qty"></span></button>
+          <button class="tab" data-tab="imonly">In Item Master only <span class="count" id="count-imonly"></span></button>
+        </nav>
+        <div class="tools">
+          <input type="search" id="filter" placeholder="Filter by number, title, description…">
+          <div class="dropdown" id="columns-dropdown">
+            <button type="button" class="btn" id="columns-btn">Columns ▾</button>
+            <div class="dropdown-menu hidden" id="columns-menu"></div>
+          </div>
+          <button type="button" class="btn" id="btn-export">Download .xlsx</button>
+        </div>
+      </div>
+
+      <div class="tab-pane" id="pane-missing"></div>
+      <div class="tab-pane hidden" id="pane-qty"></div>
+      <div class="tab-pane hidden" id="pane-imonly"></div>
+    </section>
+
+    <section class="howto">
+      <details>
+        <summary>How it works & assumptions</summary>
+        <ul>
+          <li><strong>Match key:</strong> part number (Vault item “Number”), case-insensitive.</li>
+          <li><strong>Missing from Item Master:</strong> part numbers found in the CAD BOM but absent from the Item Master — the classic symptom of a component accidentally set to <em>BOM Reference</em> in Inventor.</li>
+          <li><strong>Reference assemblies:</strong> when a whole assembly is missing, its child parts are grouped under it and collapsed — a reference assembly's entire BOM is expected to be absent, so only the assembly itself needs action. With a multi-level CAD BOM (PDF or leveled export) the grouping is exact; with the flat Vault Excel paste it is inferred from the export's depth-first order plus the Item Master hierarchy.</li>
+          <li><strong>Quantity mismatches:</strong> rolled-up total quantity per part (own qty × parent assembly quantities, summed over all occurrences) compared between CAD and Item Master. Requires a CAD source that carries quantities — the flat Vault Excel paste does not; use the multi-level PDF or a leveled export with a QTY column.</li>
+          <li><strong>In Item Master only:</strong> items whose number never appears in the CAD BOM — stale or manually added entries worth reviewing.</li>
+        </ul>
+      </details>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <div class="wrap">BOM Compare · runs entirely client-side · <a href="https://github.com/anishdhar9/BOMCompare.github.io">source</a></div>
+  </footer>
+
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="vendor/pdf.min.js"></script>
+  <script src="js/compare.js"></script>
+  <script src="js/parsers/itemmaster.js"></script>
+  <script src="js/parsers/cad-flat-xlsx.js"></script>
+  <script src="js/parsers/cad-leveled.js"></script>
+  <script src="js/parsers/pdf-extract.js"></script>
+  <script src="js/parsers/detect.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
