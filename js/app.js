@@ -11,13 +11,26 @@
   }
 
   const state = {
-    cad: null,          // parsed CAD result (+ fileName, ctx for re-mapping)
+    cadSources: [],     // parsed CAD results (max 2: full structure + intended BOM)
     im: null,           // parsed Item Master result (+ fileName)
     result: null,
     activeTab: 'missing',
     filter: '',
     mappingCtx: null,   // { aoa, indents, source, analysis, fileName }
   };
+
+  // The two roles a CAD file can play; a new upload replaces the previous
+  // file of the same role, so at most one of each is kept.
+  function cadRole(parsed) {
+    return parsed.source === 'leveled-sheet' ? 'bom' : 'structure';
+  }
+
+  function addCadSource(parsed) {
+    const role = cadRole(parsed);
+    const idx = state.cadSources.findIndex(function (s) { return cadRole(s) === role; });
+    if (idx >= 0) state.cadSources.splice(idx, 1, parsed);
+    else state.cadSources.push(parsed);
+  }
 
   /* ---------------- column visibility ---------------- */
 
@@ -66,20 +79,66 @@
 
   /* ---------------- upload handling ---------------- */
 
-  function setStatus(role, fileName, chips, error) {
-    $('status-file-' + role).textContent = fileName || '';
-    const chipBox = $('status-chips-' + role);
-    chipBox.innerHTML = '';
+  function chipEls(box, chips) {
     (chips || []).forEach(function (ch) {
       const el = document.createElement('span');
       el.className = 'chip' + (ch.kind ? ' ' + ch.kind : '');
       el.textContent = ch.text;
       if (ch.title) el.title = ch.title;
-      chipBox.appendChild(el);
+      box.appendChild(el);
     });
-    $('status-error-' + role).textContent = error || '';
-    const zone = $('zone-' + role);
-    zone.classList.toggle('parsed', !error && !!fileName && !!(role === 'cad' ? state.cad : state.im));
+  }
+
+  // Item Master zone: single file
+  function setImStatus(fileName, chips, error) {
+    $('status-file-im').textContent = fileName || '';
+    const chipBox = $('status-chips-im');
+    chipBox.innerHTML = '';
+    chipEls(chipBox, chips);
+    $('status-error-im').textContent = error || '';
+    const zone = $('zone-im');
+    zone.classList.toggle('parsed', !error && !!fileName && !!state.im);
+    zone.classList.toggle('error', !!error);
+  }
+
+  // CAD zone: one row per loaded source, with a remove button
+  function renderCadSources(progressText, error) {
+    const box = $('cad-sources');
+    box.innerHTML = '';
+    state.cadSources.forEach(function (src, i) {
+      const row = document.createElement('div');
+      row.className = 'dz-source';
+      const name = document.createElement('span');
+      name.className = 'dz-source-name';
+      name.textContent = src.fileName || '(file)';
+      row.appendChild(name);
+      const chips = document.createElement('span');
+      chips.className = 'dz-chips';
+      chipEls(chips, chipsFor(src));
+      row.appendChild(chips);
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'dz-remove';
+      rm.title = 'Remove this file';
+      rm.textContent = '✕';
+      rm.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        state.cadSources.splice(i, 1);
+        renderCadSources('', '');
+        updateCompareButton();
+      });
+      row.appendChild(rm);
+      box.appendChild(row);
+    });
+    if (progressText) {
+      const p = document.createElement('div');
+      p.className = 'dz-source';
+      p.textContent = progressText;
+      box.appendChild(p);
+    }
+    $('status-error-cad').textContent = error || '';
+    const zone = $('zone-cad');
+    zone.classList.toggle('parsed', !error && state.cadSources.length > 0);
     zone.classList.toggle('error', !!error);
   }
 
@@ -90,7 +149,8 @@
       chips.push({ text: parsed.rows.length + ' rows' });
       chips.push({ text: parsed.hasPaths ? 'hierarchy ✓' : 'no hierarchy', kind: parsed.hasPaths ? '' : 'warn' });
     } else {
-      const srcLabel = { 'flat-xlsx': 'Vault flat export', 'pdf': 'PDF (multi-level)', 'leveled-sheet': 'Leveled table' }[parsed.source] || parsed.source;
+      let srcLabel = { 'flat-xlsx': 'Vault flat export', 'pdf': 'Vault PDF (full structure)', 'leveled-sheet': 'Leveled table' }[parsed.source] || parsed.source;
+      if (parsed.source === 'leveled-sheet' && parsed.hasStructure) srcLabel = 'Inventor BOM export';
       chips.push({ text: srcLabel, kind: 'good' });
       chips.push({ text: parsed.items.length + ' components' });
       chips.push({ text: parsed.hasQty ? 'quantities ✓' : 'no quantities', kind: parsed.hasQty ? '' : 'warn' });
@@ -111,22 +171,23 @@
     });
   }
 
-  async function handleFile(role, file) {
+  async function handleFiles(role, files) {
     hideMapping();
-    setStatus(role, file.name, [{ text: 'reading…' }], '');
-    try {
-      const buf = await readFileAsArrayBuffer(file);
-      if (/\.pdf$/i.test(file.name)) {
-        if (role === 'im') throw new Error('PDF is only supported for the CAD BOM. Use the Excel export for the Item Master.');
-        await handleCadPdf(file, buf);
-      } else {
-        const wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: false });
-        if (role === 'im') handleImWorkbook(file, wb);
-        else handleCadWorkbook(file, wb);
+    for (const file of files) {
+      try {
+        const buf = await readFileAsArrayBuffer(file);
+        if (/\.pdf$/i.test(file.name)) {
+          if (role === 'im') throw new Error('PDF is only supported for the CAD BOM. Use the Excel export for the Item Master.');
+          await handleCadPdf(file, buf);
+        } else {
+          const wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: false });
+          if (role === 'im') handleImWorkbook(file, wb);
+          else handleCadWorkbook(file, wb);
+        }
+      } catch (e) {
+        if (role === 'cad') renderCadSources('', file.name + ': ' + (e.message || String(e)));
+        else { state.im = null; setImStatus(file.name, [], e.message || String(e)); }
       }
-    } catch (e) {
-      if (role === 'cad') state.cad = null; else state.im = null;
-      setStatus(role, file.name, [], e.message || String(e));
     }
     updateCompareButton();
   }
@@ -142,7 +203,7 @@
     }
     im.fileName = file.name;
     state.im = im;
-    setStatus('im', file.name, chipsFor(im), '');
+    setImStatus(file.name, chipsFor(im), '');
   }
 
   function handleCadWorkbook(file, wb) {
@@ -150,8 +211,8 @@
     if (res && res.ok) {
       const cad = res.ok;
       cad.fileName = file.name;
-      state.cad = cad;
-      setStatus('cad', file.name, chipsFor(cad), '');
+      addCadSource(cad);
+      renderCadSources('', '');
       if (cad.imShaped) {
         notice('warn', 'The file in the CAD BOM box looks like an Item Master export (it has Vault item columns such as “Row Order”/“Row Type”). If that was a mistake, drop it on the right-hand box instead.');
       }
@@ -162,8 +223,7 @@
       if (asIm) {
         throw new Error('This looks like an Item Master export — drop it on the Item Master box on the right.');
       }
-      state.cad = null;
-      setStatus('cad', file.name, [{ text: 'columns not recognized', kind: 'warn' }], '');
+      renderCadSources('', '');
       showMapping({
         aoa: res.needsMapping.aoa,
         indents: null,
@@ -180,17 +240,16 @@
     const grid = await BC.pdfExtract.extractGrid(buf, {
       pdfjsLib: window.pdfjsLib,
       onProgress: function (p, total) {
-        setStatus('cad', file.name, [{ text: 'reading PDF page ' + p + '/' + total + '…' }], '');
+        renderCadSources('reading ' + file.name + ' — page ' + p + '/' + total + '…', '');
       },
     });
-    if (!grid.rows.length) {
+    if (grid.rows.length < 2) {
       throw new Error((grid.warnings[0] || 'No table found in the PDF.') +
-        '\nIf this is a Vault multi-level BOM, please report it so the extractor can be tuned.');
+        '\nExpected the Vault web client\'s multi-level BOM ("Uses") PDF report.');
     }
     const parsed = BC.cadLeveledParser.parse(grid.rows, { indents: grid.indents, source: 'pdf' });
     if (!parsed) {
-      state.cad = null;
-      setStatus('cad', file.name, [{ text: 'columns not recognized', kind: 'warn' }], '');
+      renderCadSources('', '');
       showMapping({
         aoa: grid.rows,
         indents: grid.indents,
@@ -202,8 +261,8 @@
     }
     parsed.fileName = file.name;
     parsed.warnings = (grid.warnings || []).concat(parsed.warnings || []);
-    state.cad = parsed;
-    setStatus('cad', file.name, chipsFor(parsed), '');
+    addCadSource(parsed);
+    renderCadSources('', '');
   }
 
   /* ---------------- column-mapping panel ---------------- */
@@ -288,8 +347,8 @@
     });
     if (!parsed || !parsed.items.length) { alert('No rows with a part number found in that column.'); return; }
     parsed.fileName = ctx.fileName;
-    state.cad = parsed;
-    setStatus('cad', ctx.fileName, chipsFor(parsed), '');
+    addCadSource(parsed);
+    renderCadSources('', '');
     hideMapping();
     updateCompareButton();
   });
@@ -307,22 +366,30 @@
   /* ---------------- compare & render ---------------- */
 
   function updateCompareButton() {
-    $('btn-compare').disabled = !(state.cad && state.im);
+    $('btn-compare').disabled = !(state.cadSources.length && state.im);
   }
 
   $('btn-compare').addEventListener('click', function () {
-    if (!state.cad || !state.im) return;
+    if (!state.cadSources.length || !state.im) return;
     clearNotices();
-    state.result = BC.compare(state.cad, state.im);
-    if (!state.cad.hasQty) {
-      notice('warn', 'The CAD BOM source has no quantity column, so quantity comparison is disabled. ' +
-        'Use the multi-level BOM PDF from Vault (with a QTY column visible) or a leveled export to enable it.');
+    state.result = BC.compareAll(state.cadSources, state.im);
+    const res = state.result;
+    if (!res.hasQty) {
+      notice('warn', 'None of the CAD BOM sources has a quantity column, so quantity comparison is disabled. ' +
+        'Add the Inventor BOM export (.xlsx with a QTY column) to enable it.');
     }
-    if (!state.cad.hasLevels) {
+    if (!res.hasLevels) {
       notice('info', 'The CAD BOM has no level information — grouping of reference-assembly children is inferred ' +
         'from the export’s depth-first order and the Item Master hierarchy.');
     }
-    for (const w of state.result.warnings || []) notice('info', w);
+    if (res.referenceRoots === null) {
+      notice('info', 'Upload the Vault multi-level BOM PDF and the Inventor BOM export together to also get the ' +
+        '“Reference items” review list (everything currently flagged BOM Reference in the model).');
+    }
+    for (const w of res.warnings || []) notice('info', w);
+    // reference tab visibility
+    $('tab-ref').classList.toggle('hidden', res.referenceRoots === null);
+    if (res.referenceRoots === null && state.activeTab === 'ref') switchTab('missing');
     $('results').classList.remove('hidden');
     renderResults();
     $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -354,6 +421,9 @@
       { num: res.qtyMismatches === null ? '—' : res.qtyMismatches.length, lbl: 'quantity mismatches', cls: res.qtyMismatches && res.qtyMismatches.length ? 'amber' : '' },
       { num: res.imOnly.length, lbl: 'in Item Master only' },
     ];
+    if (res.referenceRoots !== null) {
+      cards.splice(4, 0, { num: res.referenceTotal, lbl: 'reference components in CAD' });
+    }
     for (const c of cards) {
       const el = document.createElement('div');
       el.className = 'card' + (c.cls ? ' ' + c.cls : '');
@@ -364,25 +434,22 @@
     }
 
     $('count-missing').textContent = res.actionableCount;
+    $('count-ref').textContent = res.referenceRoots === null ? '' : res.referenceRoots.length;
     $('count-qty').textContent = res.qtyMismatches === null ? '—' : res.qtyMismatches.length;
     $('count-imonly').textContent = res.imOnly.length;
 
     renderMissingTab();
+    renderRefTab();
     renderQtyTab();
     renderImOnlyTab();
   }
 
-  /* ----- missing tab (tree table) ----- */
+  /* ----- tree tables (missing + reference tabs) ----- */
 
-  function renderMissingTab() {
-    const pane = $('pane-missing');
+  // opts: { rowClass, groupedBadge, extraBadge(node, depth) -> {text, cls}|null }
+  function renderTree(pane, roots, opts) {
     const res = state.result;
     pane.innerHTML = '';
-    if (!res.missingRoots.length) {
-      pane.innerHTML = '<div class="empty-state">🎉 Every CAD part number exists in the Item Master.</div>';
-      return;
-    }
-
     const table = document.createElement('table');
     table.className = 'results-table';
     const cols = visibleCols();
@@ -393,7 +460,7 @@
     if (cols.title) addTh(htr, 'Title');
     if (cols.description) addTh(htr, 'Description');
     if (cols.type) addTh(htr, 'Type');
-    if (cols.qty && state.cad.hasQty) addTh(htr, 'Qty (CAD)');
+    if (cols.qty && res.hasQty) addTh(htr, 'Qty (CAD)');
     if (cols.file) addTh(htr, 'File');
     if (cols.material) addTh(htr, 'Material');
     if (cols.row) addTh(htr, 'CAD row');
@@ -403,12 +470,12 @@
 
     let uid = 0;
     const renderNode = function (node, depth, parentId) {
-      const id = 'mn' + (uid++);
+      const id = opts.idPrefix + (uid++);
       const it = node.item;
       if (state.filter && !nodeTreeMatches(node)) return;
 
       const tr = document.createElement('tr');
-      tr.className = depth === 0 ? 'row-missing' : 'row-child';
+      tr.className = depth === 0 ? opts.rowClass : 'row-child';
       tr.dataset.id = id;
       if (parentId) {
         tr.dataset.parent = parentId;
@@ -443,15 +510,23 @@
       if (depth === 0 && node.children.length) {
         const g = document.createElement('span');
         g.className = 'badge grouped';
-        g.textContent = '+' + BC.countDescendants(node) + ' children grouped (reference subtree)';
+        g.textContent = '+' + BC.countDescendants(node) + ' ' + opts.groupedBadge;
         tdNum.appendChild(g);
+        tdNum.appendChild(document.createTextNode(' '));
+      }
+      const extra = opts.extraBadge ? opts.extraBadge(node, depth) : null;
+      if (extra) {
+        const x = document.createElement('span');
+        x.className = 'badge ' + extra.cls;
+        x.textContent = extra.text;
+        tdNum.appendChild(x);
       }
       tr.appendChild(tdNum);
 
       if (cols.title) addTd(tr, it.title);
       if (cols.description) addTd(tr, it.description);
       if (cols.type) addTd(tr, it.isAssembly === null ? '' : (it.isAssembly ? 'Assembly' : 'Part'));
-      if (cols.qty && state.cad.hasQty) addTd(tr, fmtQty(it.qty));
+      if (cols.qty && res.hasQty) addTd(tr, fmtQty(it.qty));
       if (cols.file) addTd(tr, it.file);
       if (cols.material) addTd(tr, it.material || '');
       if (cols.row) addTd(tr, String(it.sourceRow || ''));
@@ -460,7 +535,7 @@
       for (const c of node.children) renderNode(c, depth + 1, id);
     };
 
-    for (const rootNode of res.missingRoots) renderNode(rootNode, 0, null);
+    for (const rootNode of roots) renderNode(rootNode, 0, null);
     table.appendChild(tbody);
     pane.appendChild(table);
 
@@ -479,6 +554,52 @@
           tr.classList.remove('hidden-row');
         });
       }
+    });
+  }
+
+  function renderMissingTab() {
+    const pane = $('pane-missing');
+    const res = state.result;
+    if (!res.missingRoots.length) {
+      pane.innerHTML = '<div class="empty-state">🎉 Every CAD part number exists in the Item Master.</div>';
+      return;
+    }
+    renderTree(pane, res.missingRoots, {
+      idPrefix: 'mn',
+      rowClass: 'row-missing',
+      groupedBadge: 'children grouped (reference subtree)',
+    });
+  }
+
+  function renderRefTab() {
+    const pane = $('pane-ref');
+    const res = state.result;
+    pane.innerHTML = '';
+    if (res.referenceRoots === null) return;
+    const intro = document.createElement('p');
+    intro.className = 'pane-intro';
+    intro.textContent = 'Components that are in the CAD structure but not in the Inventor BOM export — i.e. everything ' +
+      'currently flagged “BOM Reference” in the model. Review each one: should it really be reference?';
+    pane.appendChild(intro);
+    if (!res.referenceRoots.length) {
+      const d = document.createElement('div');
+      d.className = 'empty-state';
+      d.textContent = 'No reference components — every CAD component is part of the intended BOM.';
+      pane.appendChild(d);
+      return;
+    }
+    const holder = document.createElement('div');
+    pane.appendChild(holder);
+    renderTree(holder, res.referenceRoots, {
+      idPrefix: 'rn',
+      rowClass: 'row-ref',
+      groupedBadge: 'children (reference subtree)',
+      extraBadge: function (node, depth) {
+        if (depth !== 0) return null;
+        return node.inItemMaster
+          ? { text: 'in Item Master ✓', cls: 'ok' }
+          : { text: 'not in Item Master', cls: 'missing' };
+      },
     });
   }
 
@@ -657,14 +778,18 @@
 
   /* ---------------- tabs, filter, columns dropdown ---------------- */
 
+  function switchTab(name) {
+    state.activeTab = name;
+    document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === name); });
+    ['missing', 'ref', 'qty', 'imonly'].forEach(function (n) {
+      $('pane-' + n).classList.toggle('hidden', n !== name);
+    });
+  }
+
   $('tabs').addEventListener('click', function (ev) {
     const tab = ev.target.closest('.tab');
     if (!tab) return;
-    state.activeTab = tab.dataset.tab;
-    document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('active', t === tab); });
-    ['missing', 'qty', 'imonly'].forEach(function (name) {
-      $('pane-' + name).classList.toggle('hidden', name !== state.activeTab);
-    });
+    switchTab(tab.dataset.tab);
   });
 
   $('filter').addEventListener('input', function () {
@@ -689,7 +814,7 @@
 
     const summary = [
       ['BOM Compare results', ''],
-      ['CAD BOM file', state.cad.fileName || ''],
+      ['CAD BOM file(s)', state.cadSources.map(function (s) { return s.fileName || ''; }).join(' + ')],
       ['Item Master file', state.im.fileName || ''],
       ['Compared on', new Date().toISOString().slice(0, 16).replace('T', ' ')],
       [],
@@ -697,7 +822,8 @@
       ['Unique parts in Item Master', res.imUniqueCount],
       ['Findings needing action', res.actionableCount],
       ['Missing incl. grouped children', res.missingTotal],
-      ['Quantity mismatches', res.qtyMismatches === null ? 'n/a (CAD source has no quantities)' : res.qtyMismatches.length],
+      ['Reference components', res.referenceRoots === null ? 'n/a (needs PDF + Inventor export together)' : res.referenceTotal],
+      ['Quantity mismatches', res.qtyMismatches === null ? 'n/a (no CAD source has quantities)' : res.qtyMismatches.length],
       ['In Item Master only', res.imOnly.length],
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), 'Summary');
@@ -717,6 +843,24 @@
     };
     for (const n of res.missingRoots) walk(n, 0, n.item.number);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(missing), 'Missing from Item Master');
+
+    if (res.referenceRoots !== null) {
+      const ref = [['Reference component', 'Grouped under', 'In Item Master?', 'Part Number', 'Title', 'Description', 'Type', 'File']];
+      const walkRef = function (node, depth, rootNumber) {
+        const it = node.item;
+        ref.push([
+          depth === 0 ? 'YES' : 'child of reference subtree',
+          depth === 0 ? '' : rootNumber,
+          node.inItemMaster ? 'yes' : 'NO',
+          it.number, it.title, it.description,
+          it.isAssembly === null ? '' : (it.isAssembly ? 'Assembly' : 'Part'),
+          it.file,
+        ]);
+        for (const c of node.children) walkRef(c, depth + 1, rootNumber);
+      };
+      for (const n of res.referenceRoots) walkRef(n, 0, n.item.number);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ref), 'Reference items');
+    }
 
     const qty = [['Part Number', 'Title', 'Qty in CAD', 'Qty in Item Master', 'Difference']];
     if (res.qtyMismatches) {
@@ -749,7 +893,7 @@
       if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
     });
     input.addEventListener('change', function () {
-      if (input.files && input.files[0]) handleFile(role, input.files[0]);
+      if (input.files && input.files.length) handleFiles(role, Array.from(input.files));
       input.value = '';
     });
     zone.addEventListener('dragover', function (ev) { ev.preventDefault(); zone.classList.add('dragover'); });
@@ -757,7 +901,7 @@
     zone.addEventListener('drop', function (ev) {
       ev.preventDefault();
       zone.classList.remove('dragover');
-      if (ev.dataTransfer.files && ev.dataTransfer.files[0]) handleFile(role, ev.dataTransfer.files[0]);
+      if (ev.dataTransfer.files && ev.dataTransfer.files.length) handleFiles(role, Array.from(ev.dataTransfer.files));
     });
   }
 

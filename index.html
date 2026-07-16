@@ -20,15 +20,15 @@
   <main class="wrap">
     <section class="uploads">
       <div class="dropzone" id="zone-cad" data-role="cad" tabindex="0">
-        <input type="file" id="file-cad" accept=".pdf,.xlsx,.xls,.csv" hidden>
+        <input type="file" id="file-cad" accept=".pdf,.xlsx,.xls,.csv" multiple hidden>
         <div class="dz-inner">
           <div class="dz-icon">📐</div>
           <h2>CAD BOM</h2>
-          <p class="dz-hint">Multi-level BOM PDF from Vault, or the Vault Excel paste (.pdf, .xlsx, .xls, .csv)</p>
-          <p class="dz-file" id="status-file-cad"></p>
-          <div class="dz-chips" id="status-chips-cad"></div>
+          <p class="dz-hint">Vault multi-level BOM PDF, Inventor BOM export (.xlsx), or the Vault Excel paste.<br>
+            <strong>Tip:</strong> drop the PDF <em>and</em> the Inventor export together to also get the reference-items review list and quantity checks.</p>
+          <div class="dz-sources" id="cad-sources"></div>
           <p class="dz-error" id="status-error-cad"></p>
-          <button type="button" class="btn btn-small" id="pick-cad">Choose file</button>
+          <button type="button" class="btn btn-small" id="pick-cad">Choose file(s)</button>
         </div>
       </div>
 
@@ -68,6 +68,7 @@
       <div class="toolbar">
         <nav class="tabs" id="tabs">
           <button class="tab active" data-tab="missing">Missing from Item Master <span class="count" id="count-missing"></span></button>
+          <button class="tab hidden" data-tab="ref" id="tab-ref">Reference items <span class="count" id="count-ref"></span></button>
           <button class="tab" data-tab="qty">Quantity mismatches <span class="count" id="count-qty"></span></button>
           <button class="tab" data-tab="imonly">In Item Master only <span class="count" id="count-imonly"></span></button>
         </nav>
@@ -82,6 +83,7 @@
       </div>
 
       <div class="tab-pane" id="pane-missing"></div>
+      <div class="tab-pane hidden" id="pane-ref"></div>
       <div class="tab-pane hidden" id="pane-qty"></div>
       <div class="tab-pane hidden" id="pane-imonly"></div>
     </section>
@@ -91,9 +93,17 @@
         <summary>How it works & assumptions</summary>
         <ul>
           <li><strong>Match key:</strong> part number (Vault item “Number”), case-insensitive.</li>
+          <li><strong>CAD BOM sources</strong> (upload one or, better, two together):
+            <ul>
+              <li><em>Vault multi-level BOM PDF</em> (the web client's “Uses” report) — the full CAD structure <strong>including reference components</strong>; hierarchy from indentation; carries no quantities.</li>
+              <li><em>Inventor BOM export</em> (.xlsx with Item / Part Number / QTY / BOM Structure) — the intended BOM: quantities and virtual components, but reference components are excluded from it.</li>
+              <li><em>Vault Excel paste</em> (flat file listing) — full structure, no hierarchy or quantities; grouping is then inferred from the export's depth-first order plus the Item Master hierarchy.</li>
+            </ul>
+          </li>
           <li><strong>Missing from Item Master:</strong> part numbers found in the CAD BOM but absent from the Item Master — the classic symptom of a component accidentally set to <em>BOM Reference</em> in Inventor.</li>
-          <li><strong>Reference assemblies:</strong> when a whole assembly is missing, its child parts are grouped under it and collapsed — a reference assembly's entire BOM is expected to be absent, so only the assembly itself needs action. With a multi-level CAD BOM (PDF or leveled export) the grouping is exact; with the flat Vault Excel paste it is inferred from the export's depth-first order plus the Item Master hierarchy.</li>
-          <li><strong>Quantity mismatches:</strong> rolled-up total quantity per part (own qty × parent assembly quantities, summed over all occurrences) compared between CAD and Item Master. Requires a CAD source that carries quantities — the flat Vault Excel paste does not; use the multi-level PDF or a leveled export with a QTY column.</li>
+          <li><strong>Reference assemblies:</strong> when a whole assembly is missing, its child parts are grouped under it and collapsed — a reference assembly's entire BOM is expected to be absent, so only the assembly itself needs action.</li>
+          <li><strong>Reference items</strong> (needs two CAD sources): components in the full CAD structure (PDF or Vault paste) that are absent from the Inventor BOM export — the exact list of what is currently flagged <em>BOM Reference</em> in the model, each marked whether it also made it into the Item Master. Review it to confirm every entry is intentional.</li>
+          <li><strong>Quantity mismatches:</strong> rolled-up total quantity per part (own qty × parent assembly quantities, summed over all occurrences) compared between CAD and Item Master. Requires a source with a QTY column — that's the Inventor BOM export; the Vault PDF and flat paste carry no quantities.</li>
           <li><strong>In Item Master only:</strong> items whose number never appears in the CAD BOM — stale or manually added entries worth reviewing.</li>
         </ul>
       </details>

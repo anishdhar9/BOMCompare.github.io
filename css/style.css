@@ -68,6 +68,18 @@ body {
 .dz-file { margin: 4px 0; font-weight: 600; word-break: break-all; }
 .dz-error { margin: 4px 0; color: var(--red-text); font-size: 13px; white-space: pre-line; }
 .dz-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 4px 0 8px; }
+.dz-sources { margin: 4px 0 8px; display: flex; flex-direction: column; gap: 6px; }
+.dz-source {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px;
+  font-size: 13px;
+}
+.dz-source-name { font-weight: 600; word-break: break-all; }
+.dz-source .dz-chips { margin: 0; }
+.dz-remove {
+  border: 1px solid var(--border); background: var(--bg); color: var(--muted);
+  border-radius: 999px; width: 22px; height: 22px; line-height: 1; cursor: pointer; font-size: 12px;
+}
+.dz-remove:hover { border-color: var(--red-border); color: var(--red-text); }
 .chip {
   background: var(--chip-bg); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--text);
 }
@@ -145,6 +157,8 @@ table.results-table { border-collapse: collapse; width: 100%; font-size: 13.5px;
 
 tr.row-missing { background: var(--red-bg); }
 tr.row-missing .num-cell { color: var(--red-text); font-weight: 700; }
+tr.row-ref { background: var(--amber-bg); }
+tr.row-ref .num-cell { color: var(--amber-text); font-weight: 700; }
 tr.row-child { background: var(--muted-row); color: var(--muted); }
 tr.row-child .num-cell { font-weight: 400; }
 tr.row-qty { background: var(--amber-bg); }
@@ -156,6 +170,9 @@ tr.hidden-row { display: none; }
 }
 .badge.asm { background: var(--red-border); color: #fff; }
 .badge.grouped { background: var(--chip-bg); color: var(--muted); font-weight: 500; }
+.badge.ok { background: var(--accent); color: #fff; }
+.badge.missing { background: var(--red-border); color: #fff; }
+.pane-intro { margin: 8px 10px; font-size: 13.5px; color: var(--muted); }
 .expander {
   cursor: pointer; user-select: none; display: inline-block; width: 18px; text-align: center;
   color: var(--accent); font-weight: 700;

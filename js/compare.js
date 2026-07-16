@@ -162,7 +162,9 @@
 
   // Exact grouping when the CAD source has levels: a missing item whose
   // ancestor (by level) is also missing goes under that ancestor.
-  function groupMissingLeveled(cad, imIndex) {
+  // `hasFn(pn)` says whether a PN counts as present (e.g. in the Item Master,
+  // or — for reference detection — in the intended-BOM export).
+  function groupMissingLeveled(cad, hasFn) {
     const rootNodes = [];
     const seen = new Map(); // PN -> node (first occurrence wins)
     const stack = [];       // {level, missing, node|null}
@@ -171,7 +173,7 @@
       if (!pn) continue;
       const level = it.level !== null ? it.level : 1;
       while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
-      const missing = !imIndex.byNumber.has(pn);
+      const missing = !hasFn(pn);
       let node = null;
       if (missing) {
         node = seen.get(pn) || null;
@@ -198,14 +200,14 @@
   // seeing a present item that belongs to such a set closes everything opened
   // above that assembly — which is what bounds a missing (reference)
   // assembly's subtree.
-  function groupMissingFlat(cad, imIndex) {
+  function groupMissingFlat(cad, hasFn, childSets) {
     const rootNodes = [];
     const seen = new Map(); // PN -> node
     const stack = [];       // {number, missing, expected:Set|null, node|null}
     for (const it of cad.items) {
       const pn = normNumber(it.number);
       if (!pn) continue;
-      const present = imIndex.byNumber.has(pn);
+      const present = hasFn(pn);
       if (present) {
         // resync: deepest open assembly that expects this PN as a child
         let idx = -1;
@@ -214,7 +216,7 @@
         }
         if (idx >= 0) stack.length = idx + 1;
         if (it.isAssembly) {
-          stack.push({ number: pn, missing: false, expected: imIndex.childSets.get(pn) || new Set(), node: null });
+          stack.push({ number: pn, missing: false, expected: childSets.get(pn) || new Set(), node: null });
         }
       } else {
         let node = seen.get(pn) || null;
@@ -247,33 +249,108 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Main entry
+   * Dual-source helpers
    * ------------------------------------------------------------------ */
 
-  function compare(cad, im) {
-    const imIndex = indexItemMaster(im);
-
-    const cadPNs = new Set();
-    const firstCadItem = new Map(); // PN -> item (first occurrence)
+  // Direct-child PN sets derived from a leveled CAD BOM (parent level -> its
+  // children), used to bound missing subtrees when the structure source is
+  // the level-less flat export but a leveled intended-BOM export is present.
+  function cadChildSets(cad) {
+    const sets = new Map();
+    const stack = []; // {level, pn}
     for (const it of cad.items) {
       const pn = normNumber(it.number);
       if (!pn) continue;
-      cadPNs.add(pn);
-      if (!firstCadItem.has(pn)) firstCadItem.set(pn, it);
+      const level = it.level !== null ? it.level : 1;
+      while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
+      if (stack.length) {
+        const parent = stack[stack.length - 1].pn;
+        if (!sets.has(parent)) sets.set(parent, new Set());
+        sets.get(parent).add(pn);
+      }
+      stack.push({ level: level, pn: pn });
+    }
+    return sets;
+  }
+
+  // The record for the machine itself: the single item at the shallowest
+  // level (the Vault PDF starts with the root assembly; exports of the BOM
+  // grid usually don't include it).
+  function rootPNOf(cad) {
+    if (!cad.hasLevels) return null;
+    let min = Infinity;
+    for (const it of cad.items) if (it.level !== null && it.level < min) min = it.level;
+    const atMin = cad.items.filter(function (it) { return it.level === min; });
+    return atMin.length === 1 ? normNumber(atMin[0].number) : null;
+  }
+
+  // Pick which uploaded CAD source plays which role.
+  //  - structure: the full CAD structure incl. reference components
+  //    (Vault "Uses" PDF or the flat Vault export); falls back to the first.
+  //  - bom: the intended-BOM export (leveled sheet, ideally with quantities);
+  //    only distinct from `structure` when two sources are given.
+  function pickRoles(sources) {
+    let structure = sources.find(function (s) { return s.source === 'pdf'; }) ||
+                    sources.find(function (s) { return s.source === 'flat-xlsx'; }) ||
+                    sources[0];
+    let bom = sources.find(function (s) { return s !== structure && s.source === 'leveled-sheet'; }) ||
+              sources.find(function (s) { return s !== structure; }) || null;
+    return { structure: structure, bom: bom };
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Main entry
+   * ------------------------------------------------------------------ */
+
+  // cadSources: one or two parsed CAD results (e.g. Vault PDF + Inventor xlsx)
+  function compareAll(cadSources, im) {
+    const imIndex = indexItemMaster(im);
+    const roles = pickRoles(cadSources);
+    const structure = roles.structure;
+    const bom = roles.bom;
+    const inIM = function (pn) { return imIndex.byNumber.has(pn); };
+
+    const cadPNs = new Set();
+    const firstCadItem = new Map(); // PN -> item (first occurrence, structure source wins)
+    for (const src of [structure, bom]) {
+      if (!src) continue;
+      for (const it of src.items) {
+        const pn = normNumber(it.number);
+        if (!pn) continue;
+        cadPNs.add(pn);
+        if (!firstCadItem.has(pn)) firstCadItem.set(pn, it);
+      }
     }
 
-    // 1) missing from Item Master, grouped
-    const missingRoots = (cad.hasLevels ? groupMissingLeveled : groupMissingFlat)(cad, imIndex);
+    // 1) missing from Item Master, grouped on the structure source; parts
+    // that only exist in the intended-BOM export (virtual components have no
+    // CAD file, so they never appear in the Vault PDF) are appended as
+    // standalone findings.
+    const missingRoots = structure.hasLevels
+      ? groupMissingLeveled(structure, inIM)
+      : groupMissingFlat(structure, inIM, imIndex.childSets);
+    if (bom) {
+      const structPNs = new Set();
+      for (const it of structure.items) structPNs.add(normNumber(it.number));
+      const added = new Set();
+      for (const it of bom.items) {
+        const pn = normNumber(it.number);
+        if (!pn || structPNs.has(pn) || inIM(pn) || added.has(pn)) continue;
+        added.add(pn);
+        missingRoots.push(makeNode(it));
+      }
+    }
     let missingTotal = 0;
-    for (const pn of cadPNs) if (!imIndex.byNumber.has(pn)) missingTotal++;
+    for (const pn of cadPNs) if (!inIM(pn)) missingTotal++;
 
-    // 2) quantity mismatches (only when the CAD source carries quantities)
+    // 2) quantity mismatches — from whichever source carries quantities
+    const qtySource = (bom && bom.hasQty) ? bom : (structure.hasQty ? structure : null);
     let qtyMismatches = null;
-    if (cad.hasQty) {
-      const ct = cadTotals(cad);
+    if (qtySource) {
+      const ct = cadTotals(qtySource);
       qtyMismatches = [];
       for (const [pn, cadTotal] of ct.totals) {
-        if (!imIndex.byNumber.has(pn)) continue; // covered by "missing"
+        if (!inIM(pn)) continue; // covered by "missing"
         const imTotal = imIndex.totals.has(pn) ? imIndex.totals.get(pn) : null;
         if (cadTotal === null || imTotal === null) continue; // not computable
         if (Math.abs(cadTotal - imTotal) > 1e-9) {
@@ -302,23 +379,66 @@
       imOnly.push(row);
     }
 
+    // 4) reference components: in the full CAD structure but not in the
+    // intended-BOM export — the direct review list for "was this meant to be
+    // reference?". Needs both sources. The machine's own root record is not a
+    // component; treat it as present.
+    let referenceRoots = null;
+    let referenceTotal = 0;
+    if (bom && bom !== structure) {
+      const bomPNs = new Set();
+      for (const it of bom.items) bomPNs.add(normNumber(it.number));
+      const rootPN = rootPNOf(structure);
+      const inBom = function (pn) { return bomPNs.has(pn) || pn === rootPN; };
+      referenceRoots = structure.hasLevels
+        ? groupMissingLeveled(structure, inBom)
+        : groupMissingFlat(structure, inBom, cadChildSets(bom));
+      (function annotate(nodes) {
+        for (const n of nodes) {
+          n.inItemMaster = inIM(normNumber(n.item.number));
+          annotate(n.children);
+        }
+      })(referenceRoots);
+      const seenRef = new Set();
+      for (const it of structure.items) {
+        const pn = normNumber(it.number);
+        if (pn && !inBom(pn) && !seenRef.has(pn)) seenRef.add(pn);
+      }
+      referenceTotal = seenRef.size;
+    }
+
     return {
       cadUniqueCount: cadPNs.size,
       imUniqueCount: imIndex.byNumber.size,
       missingTotal: missingTotal,             // unique missing PNs, incl. grouped children
       missingRoots: missingRoots,             // actionable top-level findings (tree)
       actionableCount: missingRoots.length,
-      qtyMismatches: qtyMismatches,           // null when CAD source has no quantities
+      qtyMismatches: qtyMismatches,           // null when no CAD source has quantities
       imOnly: imOnly,
+      referenceRoots: referenceRoots,         // null unless structure + intended-BOM sources present
+      referenceTotal: referenceTotal,
+      hasQty: !!qtySource,
+      hasLevels: structure.hasLevels,
+      roles: {
+        structure: { source: structure.source, fileName: structure.fileName || '' },
+        bom: bom ? { source: bom.source, fileName: bom.fileName || '' } : null,
+      },
       warnings: imIndex.warnings,
     };
+  }
+
+  // single-source compatibility wrapper
+  function compare(cad, im) {
+    return compareAll([cad], im);
   }
 
   return {
     normNumber: normNumber,
     indexItemMaster: indexItemMaster,
     cadTotals: cadTotals,
+    cadChildSets: cadChildSets,
     compare: compare,
+    compareAll: compareAll,
     countDescendants: countDescendants,
   };
 });
