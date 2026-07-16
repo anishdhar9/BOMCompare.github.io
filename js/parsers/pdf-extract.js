@@ -86,49 +86,21 @@
     let matches = 0;
     const fields = [];
     for (const c of cells) {
-      let f = fieldForHeaderText(c.text, matchField);
-      if (f === 'part-fragment') f = 'number';
-      if (f === 'number-fragment') f = 'number';
+      let f = matchField(c.text);
+      // Vault web-client BOM PDFs label the file column as "Name". In generic
+      // spreadsheets "Name" can mean title, but in this layout the data under
+      // it is the Inventor filename (.iam/.ipt), which is valuable for assembly
+      // detection and indentation-based hierarchy.
+      if (!f && /^name$/i.test(c.text)) f = 'file';
+      if (f === 'title' && /^name$/i.test(c.text)) f = 'file';
+      // The rightmost header commonly wraps as two visual lines: "Part" on the
+      // header line and "Number" below it. Treat the "Part" cell as the part
+      // number column so the table is recognized from the first header line.
+      if (!f && /^part$/i.test(c.text)) f = 'number';
       fields.push(f);
       if (f) matches++;
     }
     return matches >= 2 ? fields : null;
-  }
-
-  function buildHeaderFromCells(cells, matchField) {
-    const rawFields = cells.map(function (c) { return fieldForHeaderText(c.text, matchField); });
-    const fields = rawFields.map(function (f) {
-      if (f === 'part-fragment' || f === 'number-fragment') return 'number';
-      return f;
-    });
-    const matches = fields.filter(Boolean).length;
-    if (matches < 2 || fields.indexOf('number') === -1) return null;
-    return fields;
-  }
-
-  function mergedHeaderCells(primary, secondary, matchField) {
-    const merged = primary.map(function (c) { return { text: c.text, x: c.x, end: c.end }; });
-    const primaryRaw = merged.map(function (c) { return fieldForHeaderText(c.text, matchField); });
-
-    for (const s of secondary || []) {
-      const sf = fieldForHeaderText(s.text, matchField);
-      if (sf !== 'number-fragment') continue;
-      let best = -1;
-      let bestDistance = Infinity;
-      for (let i = 0; i < merged.length; i++) {
-        const pf = primaryRaw[i];
-        const distance = Math.abs(((merged[i].x + merged[i].end) / 2) - ((s.x + s.end) / 2));
-        if ((pf === 'part-fragment' || /\bpart\b/i.test(merged[i].text)) && distance < bestDistance) {
-          best = i;
-          bestDistance = distance;
-        }
-      }
-      if (best >= 0 && bestDistance <= 35) {
-        merged[best].text = (merged[best].text + ' ' + s.text).replace(/\s+/g, ' ').trim();
-        merged[best].end = Math.max(merged[best].end, s.end);
-      }
-    }
-    return merged;
   }
 
   function completePartNumber(s) {
@@ -194,7 +166,7 @@
             });
             header = {
               labels: cells.map(function (c, i) {
-                if (fields[i] === 'number' && /^part(?:\s+number)?$/i.test(c.text)) return 'Part Number';
+                if (fields[i] === 'number' && /^part$/i.test(c.text)) return 'Part Number';
                 if (fields[i] === 'file' && /^name$/i.test(c.text)) return 'File';
                 return c.text;
               }),
