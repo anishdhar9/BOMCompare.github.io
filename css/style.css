@@ -78,6 +78,9 @@ body {
 .dz-icon { font-size: 30px; }
 .dropzone h2 { margin: 4px 0 2px; font-size: 18px; }
 .dz-hint { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+.dz-hint.material-note { margin: 14px 0 0; }
+.mat-mismatch { color: var(--red-text); font-weight: 600; }
+.mat-missing { color: var(--muted); font-style: italic; }
 .dz-file { margin: 4px 0; font-weight: 600; word-break: break-all; }
 .dz-error { margin: 4px 0; color: var(--red-text); font-size: 13px; white-space: pre-line; }
 .dz-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 4px 0 8px; }

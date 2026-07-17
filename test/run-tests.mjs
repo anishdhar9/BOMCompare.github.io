@@ -25,6 +25,7 @@ const { cadLeveledParser } = require(path.join(rootDir, 'js/parsers/cad-leveled.
 const { detect } = require(path.join(rootDir, 'js/parsers/detect.js'));
 const { imQc } = require(path.join(rootDir, 'js/imqc.js'));
 const { imQcExport } = require(path.join(rootDir, 'js/imqc-export.js'));
+const { materialCompare } = require(path.join(rootDir, 'js/material-compare.js'));
 const { folder } = require(path.join(rootDir, 'js/folder.js'));
 const { lldboParser } = require(path.join(rootDir, 'js/parsers/lldbo.js'));
 const { lldboCompare } = require(path.join(rootDir, 'js/lldbo-compare.js'));
@@ -378,6 +379,67 @@ console.log('\n== synthetic: LLDBO parsing + comparison against Item Master ==')
   check('detect.looksLikeLldbo recognizes the real layout', looksLikeLldbo === true);
 }
 
+console.log('\n== synthetic: material normalization (materialsMatch) ==');
+{
+  const M = materialCompare.materialsMatch;
+  // naming-convention variants that must NOT be flagged
+  check('DIN vs AISI grade match: 1.4301 == AISI 304', M('1.4301', 'AISI 304') === true);
+  check('spacing-only variant match: AISI 316L == AISI 316 L', M('AISI 316L', 'AISI 316 L') === true);
+  check('abbreviation variant match: SS316L == AISI 316L', M('SS316L', 'AISI 316L') === true);
+  check('bare grade number match: 316Ti == 1.4571', M('316Ti', '1.4571') === true);
+  check('qualifier-detail containment match: Silikon == Silikon/weiß/60°Shore', M('Silikon', 'Silikon/weiß/60°Shore') === true);
+  check('embedded-in-longer-string match: 1.4301 == Stainless Steel AISI 304', M('1.4301', 'Stainless Steel AISI 304') === true);
+  check('language-spelling match: Silicon == Silikon', M('Silicon', 'Silikon') === true);
+  check('language-spelling match: Borosilicate == Borosilikat', M('Borosilicate', 'Borosilikat') === true);
+  // genuine differences that MUST still be flagged
+  check('304 vs 304L stays flagged (not equated)', M('AISI 304', 'AISI 304L') === false);
+  check('316 vs 316L stays flagged (not equated)', M('AISI 316', 'AISI 316 L') === false);
+  check('304 vs 316 (different grade entirely) stays flagged', M('AISI 304', '1.4404') === false);
+  check('genuinely different materials stay flagged', M('Aluminium', 'AISI 304') === false);
+  check('blank never matches', M('', 'AISI 304') === false && M('AISI 304', '') === false);
+  check('placeholder "." never matches', M('.', 'AISI 316 L') === false);
+}
+
+console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-out parts ==');
+{
+  const imAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Material'],
+    ['MACH-01', '-', 'Machine', 'desc', ''],
+    ['ASSY-1', '1', 'An assembly', 'desc', ''],           // assembly (has children below) -> material not expected
+    ['PART-A', '1.1', 'Matches (naming variant)', 'desc', '1.4301'],
+    ['PART-B', '1.2', 'Genuine mismatch', 'desc', 'AISI 304'],
+    ['7-999-00001', '1.3', 'Purchased, missing material', 'desc', ''],
+    ['7-999-00002', '1.4', 'Purchased, mismatch vs CAD', 'desc', 'AISI 304'],
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => imAoa },
+  });
+
+  const cadSource = {
+    kind: 'cad', source: 'flat-xlsx', hasQty: false, items: [
+      { number: 'PART-A', title: 'Part A', material: 'AISI 304', isAssembly: false },
+      { number: 'PART-B', title: 'Part B', material: 'AISI 304L', isAssembly: false }, // genuine grade difference
+      { number: '7-999-00002', title: 'Purchased', material: 'AISI 316', isAssembly: false },
+    ],
+  };
+
+  const noCadRes = materialCompare.compareMaterial([], im);
+  check('not applicable with no CAD source carrying material', noCadRes.applicable === false, noCadRes.reason);
+  check('bought-out list still populated when not applicable', noCadRes.boughtOut.length === 2, noCadRes.boughtOut.length);
+
+  const res = materialCompare.compareMaterial([cadSource], im);
+  check('applicable with a flat-xlsx CAD source', res.applicable === true);
+  check('PART-A naming variant not flagged, only PART-B (genuine mismatch)',
+    res.mismatches.length === 1 && res.mismatches[0].number === 'PART-B', res.mismatches.map(m => m.number));
+  check('purchased parts excluded from the mismatches list', !res.mismatches.some(m => /^\d-999-/.test(m.number)));
+
+  check('bought-out panel lists both purchased parts', res.boughtOut.length === 2, res.boughtOut.map(b => b.number));
+  const bo1 = res.boughtOut.find(b => b.number === '7-999-00001');
+  check('bought-out: missing IM material flagged, no CAD data', bo1 && bo1.missingMaterial === true && bo1.cadMaterial === '', bo1);
+  const bo2 = res.boughtOut.find(b => b.number === '7-999-00002');
+  check('bought-out: CAD/IM mismatch flagged for purchased part', bo2 && bo2.mismatch === true && bo2.cadMaterial === 'AISI 316', bo2);
+}
+
 /* ---------------- real-sample baseline tests ---------------- */
 
 const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath] = process.argv.slice(2);
@@ -415,7 +477,28 @@ if (cadPath && imPath) {
   check('HSG c4 entity icon: not applicable (column absent)', hsgQc.c4.applicable === false, hsgQc.c4);
   check('HSG c5 title/desc: 49 flagged (all description-missing on non-purchased parts)',
     hsgQc.c5.fail.length === 49 && hsgQc.c5.fail.every(f => f.kind === 'description-missing'), hsgQc.c5.fail.length);
-  check('HSG c6 material: 111 non-assembly parts flagged', hsgQc.c6.applicable === true && hsgQc.c6.fail.length === 111, hsgQc.c6.fail.length);
+  check('HSG c6 material: 6 non-assembly, non-purchased parts flagged (purchased parts excluded)',
+    hsgQc.c6.applicable === true && hsgQc.c6.fail.length === 6 && hsgQc.c6.fail.every(f => !/^\d-999-/.test(f.number)),
+    hsgQc.c6.fail.length);
+
+  console.log('\n== real samples: material — bought-out parts + CAD vs Item Master ==');
+  const boughtOut = imQc.boughtOutParts(im);
+  check('HSG bought-out parts: 375 unique 7-999-* parts', boughtOut.length === 375, boughtOut.length);
+  check('bought-out parts are all 7-999-* (deduplicated)',
+    boughtOut.every(b => /^\d-999-/.test(b.number)) && new Set(boughtOut.map(b => b.number)).size === boughtOut.length,
+    boughtOut.length);
+
+  const cadRes0 = detect.parseCadFromWorkbook(cadWb, XLSX);
+  const cad0 = cadRes0.ok;
+  const matRes = materialCompare.compareMaterial([cad0], im);
+  check('material check applicable with flat-xlsx CAD source', matRes.applicable === true, matRes);
+  check('7 genuine (deduplicated, normalized) material mismatches on manufactured parts',
+    matRes.mismatches.length === 7 && new Set(matRes.mismatches.map(m => m.number)).size === 7, matRes.mismatches.map(m => m.number));
+  check('none of the mismatches are naming-convention noise (spot check: no bare 1.4301-vs-AISI304-style pair)',
+    !matRes.mismatches.some(m => m.number === '7-240-21292'), matRes.mismatches.map(m => m.number));
+  check('304-vs-304L genuine difference still flagged', matRes.mismatches.some(m => m.number === '7-238-27981'), matRes.mismatches.map(m => m.number));
+  check('material check not-applicable without a flat-xlsx CAD source (e.g. PDF-only)',
+    materialCompare.compareMaterial([], im).applicable === false);
 
   console.log('\n== real samples: styled QC export (Item Master — data quality sheet) ==');
   const styledWs = imQcExport.buildStyledImSheet(XLSX, im, hsgQc);

@@ -181,6 +181,12 @@
 
   // Check 6: Material should be populated on every non-assembly row.
   // Assemblies/weldments legitimately have no material of their own.
+  // Purchased/catalog parts (7-999-*) are EXCLUDED here — verified on real
+  // data that 105 of 111 flagged rows were purchased parts (bearings,
+  // wheels, cylinders...) where a blank material is often not a real gap,
+  // drowning out genuine manufactured-part gaps. They get their own
+  // always-visible "Bought-Out Parts" reference panel instead (below),
+  // which is not counted toward any flagged/action total.
   function checkMaterial(im) {
     if (!im.hasMaterial) {
       return { applicable: false, reason: 'No "Material" column found in this export.' };
@@ -192,12 +198,37 @@
     const fail = [];
     for (const row of im.rows) {
       if (!Array.isArray(row.path)) continue;
+      if (PURCHASED_PART_RE.test(row.number)) continue; // handled by the Bought-Out Parts panel instead
       if (assemblies.has(row.path.join('.'))) continue; // assembly, material not expected
       if (blank(row.material)) {
         fail.push({ number: row.number, rowOrder: rowOrderText(row) || '-', title: row.title, sourceRow: row.sourceRow });
       }
     }
     return { applicable: true, fail: fail };
+  }
+
+  // Every purchased/catalog part (7-999-*) in the Item Master, for the
+  // always-visible reference panel — not a pass/fail check, just a listing
+  // (js/material-compare.js fills in the CAD-side material when a CAD
+  // source that carries material is also loaded).
+  function boughtOutParts(im) {
+    var seen = new Set(); // same part can occur at several BOM positions; list it once
+    var out = [];
+    for (var i = 0; i < im.rows.length; i++) {
+      var row = im.rows[i];
+      if (!PURCHASED_PART_RE.test(row.number)) continue;
+      var key = String(row.number).trim().toUpperCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        number: row.number,
+        title: row.title,
+        imMaterial: row.material || '',
+        missingMaterial: im.hasMaterial ? blank(row.material) : false,
+        sourceRow: row.sourceRow,
+      });
+    }
+    return out;
   }
 
   function runChecks(im) {
@@ -215,9 +246,11 @@
   return {
     imQc: {
       runChecks: runChecks,
+      boughtOutParts: boughtOutParts,
       END_OF_LINE_NUMBER: END_OF_LINE_NUMBER,
       PURCHASED_PART_RE: PURCHASED_PART_RE,
       buildAssemblyPathSet: buildAssemblyPathSet,
+      blank: blank,
     },
   };
 });
