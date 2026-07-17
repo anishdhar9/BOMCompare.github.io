@@ -11,10 +11,32 @@ computer — there is no server and no upload.
 ## Usage
 
 1. Open the deployed site (or just open `index.html` locally).
-2. Drop the **CAD BOM** file(s) on the left box, the **Item Master BOM** export on the right box.
-3. Click **Compare BOMs**.
+2. Drop the **CAD BOM** file(s) on the left box, the **Item Master BOM** export on the right
+   box — or, in Chrome/Edge, click **📁 Load from folder** and pick a PNxxxx project folder
+   once to do both automatically (see below).
+3. Click **Compare BOMs** (skipped automatically in folder mode).
 4. Review the result tabs, hide/show columns as needed, filter, and download the
    result workbook via **Download .xlsx**.
+
+The moment the Item Master loads, an **Item Master data quality** panel also appears —
+independent of the CAD side — with its own review list and downloadable report.
+
+### Load from folder (Chrome/Edge)
+
+A browser cannot read a typed filesystem/NAS path — there's no API for that, in any browser,
+for security reasons. The closest (and only) equivalent is the **File System Access API**:
+click **📁 Load from folder**, pick the PNxxxx project folder once in the native OS picker,
+and everything else is automatic:
+
+- finds the CAD BOM (`Autodesk Vault- <assembly>.pdf`, or Vault's own default naming
+  `Autodesk_Vault__<assembly>.iam.pdf`) and the Item Master (`EBOM_<assembly>.xlsx`) inside it
+- loads both, runs the comparison, and writes `BOM-compare-results_<SPN>_<PN>.xlsx` straight
+  back into that same folder — no download dialog
+- if a file is missing or there's more than one candidate, that side is left for you to drop
+  in manually via the normal upload boxes, which always work regardless
+
+Firefox and Safari don't support this API — the button is hidden there and a note explains
+why; the manual dropzones are the fallback and work in every browser.
 
 **Best results:** drop *two* CAD files together — the Vault multi-level BOM **PDF** and the
 Inventor BOM **export (.xlsx)**. They are complementary:
@@ -78,21 +100,60 @@ quantity roll-up; `Item Qty`/`Quantity` enables quantity comparison.
 - **In Item Master only:** items whose number never appears in the CAD BOM — stale or
   manually added entries worth reviewing.
 
+## Item Master data quality
+
+Runs on the Item Master alone — no CAD BOM needed — the moment it loads. Catches manual
+edits made directly in Vault/ERP that don't agree with other fields on the same row, a
+different failure mode than CAD-vs-BOM drift:
+
+1. **Producer ↔ Description match** (top-level row only): its Producer/Producer Number
+   should appear in its Description.
+2. **End of Line integrity**: the "END OF LINE" row should carry the organization's fixed
+   part number and a whole-number Row Order.
+3. **Quantity vs Item Qty**: these two columns should agree on every row — a mismatch means
+   one was edited without updating the other.
+4. **Entity Icon status**: should read "Normal" everywhere, when that column is present
+   (reports "not applicable" rather than false-flagging every row when it's absent).
+5. **Title/Description completeness**: every row should have both. Purchased/catalog parts
+   (numbered `X-999-…`) are only flagged when *both* are missing, since one alone is normal
+   for catalog hardware; every other part is flagged if *either* is missing.
+6. **Material completeness**: every non-assembly row should have a Material. Assemblies are
+   detected from the Row Order hierarchy (any row with children under it) and excluded — they
+   legitimately don't carry one.
+
+The downloadable QC report includes a full copy of the Item Master with the flagged
+Title/Description/Material cells **actually highlighted** (real cell fills, not just a
+separate list) — this needed a different Excel library; see the vendoring note below.
+
 ## Development
 
 No build step; plain HTML/CSS/JS. Libraries are vendored in `vendor/`
-(SheetJS for Excel, pdf.js for PDFs) so the app works on locked-down networks.
+(`xlsx.full.min.js` is [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style) — a
+drop-in, style-writing-capable fork of SheetJS 0.18.5, needed so the exported workbooks can
+carry real cell highlighting; pdf.js for PDFs) so the app works on locked-down networks.
 npm packages are used by the Node tests only.
 
 ```
-js/compare.js            pure comparison + grouping + qty roll-up (no DOM)
-js/parsers/itemmaster.js Item Master Excel parser
+js/compare.js             pure comparison + grouping + qty roll-up (no DOM)
+js/parsers/itemmaster.js  Item Master Excel parser
 js/parsers/cad-flat-xlsx.js  flat Vault paste parser
 js/parsers/cad-leveled.js    leveled table parser (PDF grid / Excel / CSV)
 js/parsers/pdf-extract.js    pdf.js Vault-report table reconstruction
 js/parsers/detect.js         format detection / role validation
-js/app.js                UI wiring
+js/imqc.js                Item Master data-quality checks (no DOM)
+js/imqc-export.js         styled "data quality" export sheet (real cell fills)
+js/folder.js              folder auto-load classification/scan (no DOM)
+js/app.js                 UI wiring
 ```
+
+`vendor/xlsx.full.min.js` is [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style)
+rather than plain SheetJS — verified empirically that community-edition SheetJS silently
+drops cell fill styles on write, which would make the QC report's highlighting silently
+disappear. xlsx-js-style is a drop-in fork of the exact same SheetJS 0.18.5 (same global
+`XLSX`, same API) that adds style-writing support; confirmed it still reads the legacy
+`.xls` Item Master format correctly. `vendor/cpexcel.js` is its codepage-table dependency —
+only used in Node (the Node test suite `require`s the same vendored file the browser loads);
+browsers never fetch it.
 
 ### Tests
 
@@ -100,12 +161,16 @@ js/app.js                UI wiring
 npm install     # once, for the PDF tests (pdfjs-dist, pinned to the vendored version)
 node test/run-tests.mjs                                # synthetic tests only
 node test/run-tests.mjs CAD_Bom.xlsx Item_Master.xls   # + flat-export baseline
-node test/run-tests.mjs CAD_Bom.xlsx Item_Master.xls Vault_723.pdf Vault_732.pdf Inventor_732.xlsx
-                                                       # + PDF & reference baselines
+node test/run-tests.mjs CAD_Bom.xlsx Item_Master.xls Vault_723.pdf Vault_732.pdf Inventor_732.xlsx \
+  Vault_733.pdf Item_Master_733.xls                    # + PDF & reference baselines
 ```
 
 Real BOM exports are not committed (potentially sensitive data); pass their paths as
-arguments to run the full baseline assertions.
+arguments to run the full baseline assertions. The folder-auto-load feature (File System
+Access API) additionally has synthetic tests for its pure classification/scan logic in the
+same suite; its end-to-end browser behavior (native picker mocked via
+`page.addInitScript`, backed by a bridge to real files on disk) isn't part of this Node
+suite — see the commit history for the Playwright script used to verify it.
 
 ## Deployment — standalone hosting, not under a personal domain
 

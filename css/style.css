@@ -57,6 +57,13 @@ body {
 .tagline { margin: 4px 0 0; color: var(--muted); }
 .privacy { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
 
+/* ---- folder load ---- */
+.folder-load { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 22px 0 -8px; }
+.folder-status { margin: 0; font-size: 13px; color: var(--muted); }
+.folder-status.ok { color: var(--green-text); font-weight: 600; }
+.folder-status.error { color: var(--red-text); font-weight: 600; }
+#folder-unsupported { margin: 0; }
+
 /* ---- uploads ---- */
 .uploads { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 24px 0 8px; }
 @media (max-width: 760px) { .uploads { grid-template-columns: 1fr; } }

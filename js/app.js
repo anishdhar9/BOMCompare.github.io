@@ -18,6 +18,7 @@
     activeTab: 'missing',
     filter: '',
     mappingCtx: null,   // { aoa, indents, source, analysis, fileName }
+    folderHandle: null, // FileSystemDirectoryHandle from "Load from folder", if used
   };
 
   // Base name suffix from the Item Master's SPN/PN project key, e.g.
@@ -377,6 +378,21 @@
 
   /* ---------------- Item Master QC panel ---------------- */
 
+  function qcKindLabel(kind) {
+    return {
+      'both-missing': 'Title AND Description both blank',
+      'title-missing': 'Title blank',
+      'description-missing': 'Description blank',
+    }[kind] || kind;
+  }
+
+  // cols entries are [dataKey, columnLabel, formatter?] — formatter(value, row)
+  // defaults to the raw value.
+  function qcCellValue(col, row) {
+    const value = row[col[0]];
+    return col[2] ? col[2](value, row) : value;
+  }
+
   const QC_CHECKS = [
     { key: 'c1', title: 'Producer ↔ Description Match (top-level row only)',
       desc: 'The top-level row’s Producer and Producer Number should appear inside its Description.',
@@ -390,12 +406,20 @@
     { key: 'c4', title: 'Entity Icon Status',
       desc: 'Every row’s Entity Icon should read "Normal".',
       cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['icon', 'Entity Icon']] },
+    { key: 'c5', title: 'Title / Description Completeness',
+      desc: 'Every row should have a Title and Description. Purchased/catalog parts (X-999-…) are only flagged when both are blank; other parts are flagged if either is missing.',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['title', 'Title'], ['description', 'Description'], ['kind', 'Issue', qcKindLabel]] },
+    { key: 'c6', title: 'Material Completeness',
+      desc: 'Every non-assembly row should have a Material. Assemblies/weldments are excluded (they legitimately carry no material of their own).',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['title', 'Title']] },
   ];
 
   function hideImQc() {
     $('im-qc').classList.add('hidden');
     $('qc-summary').innerHTML = '';
     $('qc-sections').innerHTML = '';
+    $('qc-callout').classList.add('hidden');
+    $('qc-callout').textContent = '';
   }
 
   function qcCardFor(check, result) {
@@ -440,7 +464,7 @@
       table.appendChild(htr);
       for (const row of result.fail) {
         const tr = document.createElement('tr');
-        for (const [key] of check.cols) addTd(tr, row[key]);
+        for (const col of check.cols) addTd(tr, qcCellValue(col, row));
         table.appendChild(tr);
       }
       body.appendChild(table);
@@ -465,6 +489,22 @@
       summary.appendChild(qcCardFor(check, result));
       sections.appendChild(qcSectionFor(check, result));
     }
+
+    const callout = $('qc-callout');
+    const bits = [];
+    if (qc.c5.applicable && qc.c5.fail.length) {
+      bits.push(qc.c5.fail.length + ' row(s) need Title and/or Description populated');
+    }
+    if (qc.c6.applicable && qc.c6.fail.length) {
+      bits.push(qc.c6.fail.length + ' part(s) need Material populated');
+    }
+    if (bits.length) {
+      callout.textContent = '⚠ ' + bits.join(' · ') + ' — see below, or download the QC report for a highlighted copy of the Item Master.';
+      callout.classList.remove('hidden');
+    } else {
+      callout.textContent = '';
+      callout.classList.add('hidden');
+    }
   }
 
   // AOA rows for the "Item Master QC" export sheet, shared by the main
@@ -477,16 +517,23 @@
       rows.push([check.title, !result.applicable ? 'N/A — ' + result.reason : (result.fail.length ? result.fail.length + ' flagged' : 'OK')]);
       if (result.applicable && result.fail.length) {
         rows.push(check.cols.map(function (c) { return c[1]; }));
-        for (const row of result.fail) rows.push(check.cols.map(function (c) { return row[c[0]]; }));
+        for (const row of result.fail) rows.push(check.cols.map(function (c) { return qcCellValue(c, row); }));
       }
     }
     return rows;
+  }
+
+  // Delegates to js/imqc-export.js (shared with the Node test suite, which
+  // asserts the fills actually round-trip through a real .xlsx).
+  function buildStyledImSheet(im, qc) {
+    return BC.imQcExport.buildStyledImSheet(XLSX, im, qc);
   }
 
   $('btn-qc-export').addEventListener('click', function () {
     if (!state.imQc) return;
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
+    XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
     XLSX.writeFile(wb, 'ItemMaster-QC-report' + projectKeySuffix() + '.xlsx');
   });
 
@@ -496,8 +543,11 @@
     $('btn-compare').disabled = !(state.cadSources.length && state.im);
   }
 
-  $('btn-compare').addEventListener('click', function () {
-    if (!state.cadSources.length || !state.im) return;
+  // Runs the CAD-vs-Item-Master comparison from current state and renders
+  // it. Shared by the manual "Compare BOMs" button and the folder
+  // auto-compare path. Returns true if a comparison was actually run.
+  function runCompare() {
+    if (!state.cadSources.length || !state.im) return false;
     clearNotices();
     state.result = BC.compareAll(state.cadSources, state.im);
     const res = state.result;
@@ -519,7 +569,11 @@
     if (res.referenceRoots === null && state.activeTab === 'ref') switchTab('missing');
     $('results').classList.remove('hidden');
     renderResults();
-    $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return true;
+  }
+
+  $('btn-compare').addEventListener('click', function () {
+    if (runCompare()) $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
   function fmtQty(v) {
@@ -934,9 +988,11 @@
 
   /* ---------------- export ---------------- */
 
-  $('btn-export').addEventListener('click', function () {
+  // Builds the full Compare workbook from current state. Shared by the
+  // manual "Download .xlsx" button and the folder auto-save path so both
+  // produce byte-identical output.
+  function buildCompareWorkbook() {
     const res = state.result;
-    if (!res) return;
     const wb = XLSX.utils.book_new();
 
     const summary = [
@@ -1003,9 +1059,19 @@
 
     if (state.imQc) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
+      XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
     }
 
-    XLSX.writeFile(wb, 'BOM-compare-results' + projectKeySuffix() + '.xlsx');
+    return wb;
+  }
+
+  function compareResultFilename() {
+    return 'BOM-compare-results' + projectKeySuffix() + '.xlsx';
+  }
+
+  $('btn-export').addEventListener('click', function () {
+    if (!state.result) return;
+    XLSX.writeFile(buildCompareWorkbook(), compareResultFilename());
   });
 
   /* ---------------- dropzone wiring ---------------- */
@@ -1036,7 +1102,86 @@
     });
   }
 
+  /* ---------------- folder auto-load / auto-save ---------------- */
+  // File System Access API: a browser cannot read a typed filesystem path
+  // (no such API exists, in any browser, for security reasons). One click
+  // opens the OS's own folder picker; the user browses to the PNxxxx
+  // project folder (a mapped NAS drive or UNC share both work, since it's
+  // the OS picker doing the browsing); everything after that — scanning,
+  // loading, comparing, saving the result back — is automatic. Chrome/Edge
+  // only; Firefox/Safari fall back to the manual dropzones below.
+
+  function folderStatus(text, kind) {
+    const el = $('folder-status');
+    el.textContent = text || '';
+    el.className = 'folder-status' + (kind ? ' ' + kind : '');
+  }
+
+  async function loadFolderMatch(role, entries, label) {
+    if (entries.length === 1) {
+      const file = await entries[0].getFile();
+      await handleFiles(role, [file]);
+      return file.name;
+    }
+    if (entries.length === 0) return 'no ' + label + ' found — drop it manually';
+    return entries.length + ' possible ' + label + ' files found — ambiguous, drop the right one manually';
+  }
+
+  async function saveResultToFolder(matchSummary) {
+    if (!state.folderHandle || !state.result) return;
+    const filename = compareResultFilename();
+    try {
+      const buf = XLSX.write(buildCompareWorkbook(), { bookType: 'xlsx', type: 'array' });
+      const fileHandle = await state.folderHandle.getFileHandle(filename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(buf);
+      await writable.close();
+      folderStatus(matchSummary + ' — saved "' + filename + '" to "' + state.folderHandle.name + '" ✓', 'ok');
+    } catch (e) {
+      folderStatus(matchSummary + ' — compared, but could not save the result into the folder (' +
+        (e.message || e) + ') — use Download .xlsx instead.', 'error');
+    }
+  }
+
+  async function handlePickFolder() {
+    let handle;
+    try {
+      handle = await window.showDirectoryPicker();
+    } catch (e) {
+      if (e && e.name === 'AbortError') return; // user cancelled the picker
+      folderStatus('Could not open that folder (' + (e.message || e) + ').', 'error');
+      return;
+    }
+    state.folderHandle = handle;
+    folderStatus('Scanning "' + handle.name + '"…');
+
+    let found;
+    try {
+      found = await BC.folder.scanFolder(handle);
+    } catch (e) {
+      folderStatus('Could not read "' + handle.name + '" (' + (e.message || e) + ').', 'error');
+      return;
+    }
+
+    const cadMsg = await loadFolderMatch('cad', found['cad-pdf'], 'CAD BOM PDF');
+    const imMsg = await loadFolderMatch('im', found['item-master'], 'Item Master (EBOM_*)');
+    const matchSummary = '"' + handle.name + '" — CAD: ' + cadMsg + ' · Item Master: ' + imMsg;
+    folderStatus(matchSummary);
+
+    if (state.cadSources.length && state.im) {
+      if (runCompare()) await saveResultToFolder(matchSummary);
+    }
+  }
+
+  function setupFolderFeature() {
+    const supported = typeof window.showDirectoryPicker === 'function';
+    $('btn-pick-folder').hidden = !supported;
+    $('folder-unsupported').classList.toggle('hidden', supported);
+    if (supported) $('btn-pick-folder').addEventListener('click', handlePickFolder);
+  }
+
   wireZone('cad');
   wireZone('im');
   renderColumnsMenu();
+  setupFolderFeature();
 })();

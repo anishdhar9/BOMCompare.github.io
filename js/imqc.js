@@ -10,7 +10,7 @@
  * (Entity Icon) isn't present in a given export, rather than flagging every
  * row as failing.
  *
- * Produces: { c1, c2, c3, c4 }, each either
+ * Produces: { c1, c2, c3, c4, c5, c6 }, each either
  *   { applicable: true, fail: [...] }  or
  *   { applicable: false, reason: string }
  */
@@ -121,15 +121,103 @@
     return { applicable: true, fail: fail };
   }
 
+  // Org convention (confirmed across every sample seen): a "X-999-nnnnn"
+  // number is a purchased/catalog part (bearings, screws, o-rings...),
+  // everything else is manufactured in-house.
+  const PURCHASED_PART_RE = /^\d-999-/;
+
+  function blank(v) {
+    const s = (v || '').trim();
+    return s === '' || s === '-';
+  }
+
+  // Check 5: Title / Description completeness. Purchased/catalog parts are
+  // lenient (only flagged when BOTH are missing — e.g. "SCREW - HEX HEAD
+  // DIN 933" needs no Description to be identifiable); every other part is
+  // flagged when EITHER is missing, and which one is reported so the export
+  // can highlight just that field.
+  function checkTitleDescription(im) {
+    const fail = [];
+    for (const row of im.rows) {
+      const titleBlank = blank(row.title);
+      const descBlank = blank(row.description);
+      if (!titleBlank && !descBlank) continue;
+      const purchased = PURCHASED_PART_RE.test(row.number);
+      let kind = null;
+      if (titleBlank && descBlank) kind = 'both-missing';
+      else if (!purchased) kind = titleBlank ? 'title-missing' : 'description-missing';
+      if (!kind) continue; // purchased part, only one field blank -> allowed
+      fail.push({
+        number: row.number,
+        rowOrder: rowOrderText(row) || '-',
+        title: row.title || '(blank)',
+        description: row.description || '(blank)',
+        kind: kind,
+        sourceRow: row.sourceRow,
+      });
+    }
+    return { applicable: true, fail: fail };
+  }
+
+  // A Row Order path is an "assembly" if some other row's path is a strict
+  // child of it (starts with path + '.'); the root ('-' -> []) always
+  // counts. Same principle compare.js's indexItemMaster uses for childSets,
+  // reimplemented locally to keep imqc.js dependency-free.
+  function buildAssemblyPathSet(rows) {
+    const paths = [];
+    for (const row of rows) {
+      if (Array.isArray(row.path)) paths.push(row.path.join('.'));
+    }
+    const assemblies = new Set(['']); // root
+    for (const p of paths) {
+      if (p === '' || assemblies.has(p)) continue;
+      const prefix = p + '.';
+      for (const q of paths) {
+        if (q !== p && q.indexOf(prefix) === 0) { assemblies.add(p); break; }
+      }
+    }
+    return assemblies;
+  }
+
+  // Check 6: Material should be populated on every non-assembly row.
+  // Assemblies/weldments legitimately have no material of their own.
+  function checkMaterial(im) {
+    if (!im.hasMaterial) {
+      return { applicable: false, reason: 'No "Material" column found in this export.' };
+    }
+    if (!im.hasPaths) {
+      return { applicable: false, reason: 'No "Row Order" column found — cannot tell assemblies from parts.' };
+    }
+    const assemblies = buildAssemblyPathSet(im.rows);
+    const fail = [];
+    for (const row of im.rows) {
+      if (!Array.isArray(row.path)) continue;
+      if (assemblies.has(row.path.join('.'))) continue; // assembly, material not expected
+      if (blank(row.material)) {
+        fail.push({ number: row.number, rowOrder: rowOrderText(row) || '-', title: row.title, sourceRow: row.sourceRow });
+      }
+    }
+    return { applicable: true, fail: fail };
+  }
+
   function runChecks(im) {
     return {
       c1: checkProducerMatch(im),
       c2: checkEndOfLine(im),
       c3: checkQuantityVsItemQty(im),
       c4: checkEntityIcon(im),
+      c5: checkTitleDescription(im),
+      c6: checkMaterial(im),
       total: im.rows.length,
     };
   }
 
-  return { imQc: { runChecks: runChecks, END_OF_LINE_NUMBER: END_OF_LINE_NUMBER } };
+  return {
+    imQc: {
+      runChecks: runChecks,
+      END_OF_LINE_NUMBER: END_OF_LINE_NUMBER,
+      PURCHASED_PART_RE: PURCHASED_PART_RE,
+      buildAssemblyPathSet: buildAssemblyPathSet,
+    },
+  };
 });
