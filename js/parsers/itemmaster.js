@@ -3,8 +3,17 @@
  * (.xls or .xlsx). The export's visible columns are user-configurable in
  * Vault, so columns are located by header name; only 'Number' is mandatory.
  *
- * Produces: { kind:'itemmaster', rows:[{number,title,description,qty,path,
- *             rowType,sourceRow}], hasPaths, sheetName, columns, warnings }
+ * Produces: { kind:'itemmaster', rows:[{number,title,description,qty,
+ *             itemQty,quantity,quantityText,producer,producerNumber,
+ *             entityIcon,path,rowType,sourceRow}], hasPaths, hasEntityIcon,
+ *             hasProducer, projectKey:{spn,pn}|null, sheetName, columns,
+ *             warnings }
+ *
+ * `qty` is the resolved quantity used by compare.js's roll-up (Item Qty
+ * preferred, Quantity as fallback). `itemQty`/`quantity` are kept separate
+ * (unresolved) so imqc.js can flag when a manual edit to one doesn't match
+ * the other — a real, observed failure mode: someone edits the displayed
+ * Quantity without updating Item Qty (or vice versa).
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
@@ -59,10 +68,36 @@
           title: find(function (h) { return h.indexOf('title') === 0; }),
           description: find(function (h) { return h.indexOf('description') === 0; }),
           rowType: find(function (h) { return h === 'row type'; }),
+          producer: find(function (h) { return h === 'producer'; }),
+          producerNumber: find(function (h) { return h === 'producer number'; }),
+          entityIcon: find(function (h) { return h === 'entity icon'; }),
         },
       };
     }
     return null;
+  }
+
+  // The root/FG-level row's Producer + Producer Number columns are this
+  // organization's convention for the project's SPN/PN key (verified:
+  // Producer='SPN016823', Producer Number='22426' on the root row only —
+  // Producer is reused for real vendor names like 'SKF' on component rows).
+  // Falls back to regex over Title+Description for exports without those
+  // columns populated on the root row.
+  function extractProjectKey(rootRow) {
+    if (!rootRow) return null;
+    let spn = null, pn = null;
+    if (rootRow.producer && /^SPN\d+$/i.test(rootRow.producer)) spn = rootRow.producer.toUpperCase();
+    if (rootRow.producerNumber && /^\d+$/.test(rootRow.producerNumber)) pn = 'PN' + rootRow.producerNumber;
+    if (!spn || !pn) {
+      const text = (rootRow.title || '') + ' ' + (rootRow.description || '');
+      const m = text.match(/SPN(\d+)[_,\s]*PN(\d+)/i);
+      if (m) {
+        if (!spn) spn = 'SPN' + m[1];
+        if (!pn) pn = 'PN' + m[2];
+      }
+    }
+    if (!spn && !pn) return null;
+    return { spn: spn, pn: pn };
   }
 
   // XLSX is the SheetJS namespace (injected so Node tests can pass their own).
@@ -81,13 +116,21 @@
         const row = aoa[r] || [];
         const number = cellText(row[hdr.cols.number]);
         if (!number) continue;
-        let qty = hdr.cols.qty >= 0 ? parseQty(row[hdr.cols.qty]) : null;
-        if (qty === null && hdr.cols.qtyFallback >= 0) qty = parseQty(row[hdr.cols.qtyFallback]);
+        const itemQty = hdr.cols.qty >= 0 ? parseQty(row[hdr.cols.qty]) : null;
+        const quantity = hdr.cols.qtyFallback >= 0 ? parseQty(row[hdr.cols.qtyFallback]) : null;
+        let qty = itemQty;
+        if (qty === null) qty = quantity;
         rows.push({
           number: number,
           title: hdr.cols.title >= 0 ? cellText(row[hdr.cols.title]) : '',
           description: hdr.cols.description >= 0 ? cellText(row[hdr.cols.description]) : '',
           qty: qty,
+          itemQty: itemQty,
+          quantity: quantity,
+          quantityText: hdr.cols.qtyFallback >= 0 ? cellText(row[hdr.cols.qtyFallback]) : '',
+          producer: hdr.cols.producer >= 0 ? cellText(row[hdr.cols.producer]) : '',
+          producerNumber: hdr.cols.producerNumber >= 0 ? cellText(row[hdr.cols.producerNumber]) : '',
+          entityIcon: hdr.cols.entityIcon >= 0 ? cellText(row[hdr.cols.entityIcon]) : '',
           path: hdr.cols.path >= 0 ? parsePath(row[hdr.cols.path]) : null,
           rowType: hdr.cols.rowType >= 0 ? cellText(row[hdr.cols.rowType]) : '',
           sourceRow: r + 1,
@@ -99,11 +142,16 @@
       if (!hasPaths) warnings.push('No "Row Order" column found — quantity roll-up treats all rows as direct children.');
       if (hdr.cols.qty < 0 && hdr.cols.qtyFallback < 0) warnings.push('No quantity column found — quantity comparison unavailable.');
 
+      const rootRow = rows.find(function (r) { return Array.isArray(r.path) && r.path.length === 0; }) || rows[0];
+
       return {
         kind: 'itemmaster',
         sheetName: sheetName,
         rows: rows,
         hasPaths: hasPaths,
+        hasProducer: hdr.cols.producer >= 0 || hdr.cols.producerNumber >= 0,
+        hasEntityIcon: hdr.cols.entityIcon >= 0,
+        projectKey: extractProjectKey(rootRow),
         columns: hdr.cols,
         warnings: warnings,
       };
@@ -111,5 +159,5 @@
     return null; // not an Item Master export
   }
 
-  return { itemMasterParser: { parse: parse, parseQty: parseQty, parsePath: parsePath } };
+  return { itemMasterParser: { parse: parse, parseQty: parseQty, parsePath: parsePath, extractProjectKey: extractProjectKey } };
 });
