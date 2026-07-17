@@ -26,6 +26,8 @@ const { detect } = require(path.join(rootDir, 'js/parsers/detect.js'));
 const { imQc } = require(path.join(rootDir, 'js/imqc.js'));
 const { imQcExport } = require(path.join(rootDir, 'js/imqc-export.js'));
 const { folder } = require(path.join(rootDir, 'js/folder.js'));
+const { lldboParser } = require(path.join(rootDir, 'js/parsers/lldbo.js'));
+const { lldboCompare } = require(path.join(rootDir, 'js/lldbo-compare.js'));
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -268,7 +270,11 @@ console.log('\n== synthetic: folder auto-load file classification ==');
     ['ebom-723020509.xls', 'item-master'],
     ['EBOM.xlsx', 'item-master'],
     ['HSG_Item_Master_BOM.xls', null],                             // old naming convention, not auto-matched
-    ['PN22426_LLDBO.xlsx', null],                                  // LLDBO file, not yet classified (future work)
+    ['PN22426_LLDBO.xlsx', 'lldbo'],
+    ['PN22260_LLDBO.xlsx', 'lldbo'],                               // real sample naming
+    ['PN22260_LLDBO_rev2.xlsx', 'lldbo'],                          // tolerant of a suffix
+    ['LLDBO_PN22260.xlsx', null],                                  // wrong order, not this org's convention
+    ['PN22260_LLDBO.docx', null],                                  // right prefix, wrong extension
     ['Autodesk Vault- 723020509.dwg', null],                       // right prefix, wrong extension
     ['readme.txt', null],
     ['', null],
@@ -307,9 +313,74 @@ console.log('\n== synthetic: folder auto-load file classification ==');
   check('scanFolder reports ambiguous matches rather than picking one', ambiguousFound['item-master'].length === 2);
 }
 
+console.log('\n== synthetic: LLDBO parsing + comparison against Item Master ==');
+{
+  // mirrors the real sample's layout: merged-cell document header above a
+  // "SR. No / PART NO / Item Description / Specifications / Make / Qty. / Remarks" table
+  const lldboAoa = [
+    ['', '', 'LONG LEAD DIRECT BOUGHT OUT (LLDBO) LIST', '', '', 'ISSUE DATE', '', ''],
+    ['', '', '', '', '', 'DOCUMENT NO', '', ''],
+    ['', '', 'CUSTOMER: ACME CORP', '', '', 'DATE', '', ''],
+    ['Glatt Systems Pvt Ltd.', '', 'DBO Doc No : SPN000999_PN33445_TEST MACHINE', '', '', '', '', ''],
+    ['SR. No', 'PART NO', 'Item Description', 'Specifications', 'Make', 'Qty.', 'Remarks'],
+    [],
+    ['', 'PART-A', 'Present, qty matches', 'spec', 'MAKE', '1 Nos.', ''],
+    ['', 'PART-B', 'Missing from IM', 'spec', 'MAKE', '1 Nos.', ''],
+    ['', 'PART-C', 'Used twice, same PN', 'spec', 'MAKE', '1 Nos.', ''],
+    ['', 'PART-C', 'Used twice, same PN (2nd)', 'spec', 'MAKE', '1 Nos.', ''],
+    ['', '', 'Not yet specified', 'Pending', '', 'NA', ''],
+  ];
+  const lldbo = lldboParser.parse({ SheetNames: ['Sheet1'], Sheets: { Sheet1: {} } }, {
+    utils: { sheet_to_json: () => lldboAoa },
+  });
+  check('LLDBO parsed', !!lldbo && lldbo.rows.length === 5, lldbo && lldbo.rows.length);
+  check('LLDBO projectKey extracted from document header', lldbo.projectKey && lldbo.projectKey.spn === 'SPN000999' && lldbo.projectKey.pn === 'PN33445', lldbo.projectKey);
+  check('LLDBO customer extracted', lldbo.customer === 'ACME CORP', lldbo.customer);
+  check('LLDBO warns about the 1 no-part-number row', lldbo.warnings.some(w => w.indexOf('1 row') === 0), lldbo.warnings);
+
+  // matching project: PART-A present+correct qty, PART-B missing, PART-C
+  // summed to 2 across its two LLDBO rows but IM only has 1 -> mismatch
+  const imAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Item Qty', 'Producer', 'Producer Number'],
+    ['MACH-01', '-', 'Test Machine', 'SPN000999_PN33445_TEST MACHINE', '-', 'SPN000999', '33445'],
+    ['PART-A', '1', 'Part A', 'desc', '1', '', ''],
+    ['PART-C', '2', 'Part C', 'desc', '1', '', ''],
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => imAoa },
+  });
+  const res = lldboCompare.compareLldbo(lldbo, im, indexItemMaster);
+  check('LLDBO vs matching-project IM: no project key mismatch', res.projectKeyMismatch === null, res.projectKeyMismatch);
+  check('LLDBO: 3 unique part numbers, 1 without a PN yet', res.totalLldboItems === 3 && res.noPartNumberCount === 1, res);
+  check('LLDBO: PART-B correctly flagged missing from IM', res.missingFromIm.length === 1 && res.missingFromIm[0].number === 'PART-B', res.missingFromIm);
+  check('LLDBO: PART-C flagged with summed qty 2 vs IM qty 1', res.qtyMismatches.length === 1 &&
+    res.qtyMismatches[0].number === 'PART-C' && res.qtyMismatches[0].lldboQty === 2 && res.qtyMismatches[0].imQty === 1,
+    res.qtyMismatches);
+  check('LLDBO: PART-A (present, qty matches) not flagged anywhere',
+    !res.missingFromIm.some(m => m.number === 'PART-A') && !res.qtyMismatches.some(m => m.number === 'PART-A'));
+
+  // mismatched project: same LLDBO, IM for a different PN -> project key warning
+  const otherImAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Item Qty', 'Producer', 'Producer Number'],
+    ['MACH-02', '-', 'Other Machine', 'SPN000111_PN99999_OTHER MACHINE', '-', 'SPN000111', '99999'],
+    ['PART-A', '1', 'Part A', 'desc', '1', '', ''],
+  ];
+  const otherIm = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => otherImAoa },
+  });
+  const crossRes = lldboCompare.compareLldbo(lldbo, otherIm, indexItemMaster);
+  check('LLDBO vs wrong-project IM: project key mismatch flagged',
+    crossRes.projectKeyMismatch && crossRes.projectKeyMismatch.lldbo.pn === 'PN33445' && crossRes.projectKeyMismatch.im.pn === 'PN99999',
+    crossRes.projectKeyMismatch);
+
+  // detect.js routing: LLDBO must not be swallowed by the generic CAD leveled-table detector
+  const looksLikeLldbo = detect.looksLikeLldbo(lldboAoa);
+  check('detect.looksLikeLldbo recognizes the real layout', looksLikeLldbo === true);
+}
+
 /* ---------------- real-sample baseline tests ---------------- */
 
-const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path] = process.argv.slice(2);
+const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath] = process.argv.slice(2);
 let pdfjsLib = null;
 try { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); } catch (e) { /* npm install to enable PDF tests */ }
 
@@ -530,6 +601,36 @@ if (pdf733Path && im733Path) {
   }
 } else if (pdf733Path || im733Path) {
   console.log('\n(the lab-machine PDF test needs both the PDF and its Item Master path)');
+}
+
+if (lldboPath) {
+  console.log('\n== real sample: PN22260 LLDBO parsing ==');
+  const lldboWb = XLSX.read(fs.readFileSync(lldboPath), { type: 'buffer' });
+  const lldbo = detect.parseLldboFromWorkbook(lldboWb, XLSX);
+  check('LLDBO parsed with 16 rows', !!lldbo && lldbo.rows.length === 16, lldbo && lldbo.rows.length);
+  check('LLDBO projectKey = SPN016838 / PN22260', lldbo.projectKey && lldbo.projectKey.spn === 'SPN016838' && lldbo.projectKey.pn === 'PN22260', lldbo.projectKey);
+  check('LLDBO customer extracted', lldbo.customer === 'RADIANT NUTRACEUTICALS LTD, Bangladesh', lldbo.customer);
+  const withPn = lldbo.rows.filter(r => r.partNo).length;
+  check('LLDBO has 9 rows with a Part No, 7 without', withPn === 9 && (lldbo.rows.length - withPn) === 7, { withPn, total: lldbo.rows.length });
+  check('LLDBO duplicate PN 7-999-07921 (wet + dry mill motor) both captured',
+    lldbo.rows.filter(r => r.partNo === '7-999-07921').length === 2,
+    lldbo.rows.filter(r => r.partNo === '7-999-07921').map(r => r.description));
+
+  // dropped in the CAD box by mistake: must not silently misparse as a leveled CAD BOM
+  const asCad = detect.parseCadFromWorkbook(lldboWb, XLSX);
+  check('LLDBO dropped as CAD does not silently succeed', !(asCad && asCad.ok), asCad);
+
+  if (imPath) {
+    console.log('\n== real samples: LLDBO(PN22260) vs HSG Item Master(PN22426) — cross-project sanity check ==');
+    const imWb2 = XLSX.read(fs.readFileSync(imPath), { type: 'buffer' });
+    const im2 = detect.parseItemMasterFromWorkbook(imWb2, XLSX);
+    const res = lldboCompare.compareLldbo(lldbo, im2, indexItemMaster);
+    check('cross-project mismatch correctly flagged (different PN)',
+      res.projectKeyMismatch && res.projectKeyMismatch.lldbo.pn === 'PN22260' && res.projectKeyMismatch.im.pn === 'PN22426',
+      res.projectKeyMismatch);
+    check('7 of 8 unique LLDBO part numbers absent from the unrelated Item Master',
+      res.totalLldboItems === 8 && res.missingFromIm.length === 7, { total: res.totalLldboItems, missing: res.missingFromIm.length });
+  }
 }
 
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nall tests passed');

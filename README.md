@@ -19,7 +19,8 @@ computer — there is no server and no upload.
    result workbook via **Download .xlsx**.
 
 The moment the Item Master loads, an **Item Master data quality** panel also appears —
-independent of the CAD side — with its own review list and downloadable report.
+independent of the CAD side — with its own review list and downloadable report. An optional
+**Long-Lead Parts (LLDBO)** panel sits below it for checking early-released long-lead items.
 
 ### Load from folder (Chrome/Edge)
 
@@ -29,11 +30,13 @@ click **📁 Load from folder**, pick the PNxxxx project folder once in the nati
 and everything else is automatic:
 
 - finds the CAD BOM (`Autodesk Vault- <assembly>.pdf`, or Vault's own default naming
-  `Autodesk_Vault__<assembly>.iam.pdf`) and the Item Master (`EBOM_<assembly>.xlsx`) inside it
-- loads both, runs the comparison, and writes `BOM-compare-results_<SPN>_<PN>.xlsx` straight
-  back into that same folder — no download dialog
-- if a file is missing or there's more than one candidate, that side is left for you to drop
-  in manually via the normal upload boxes, which always work regardless
+  `Autodesk_Vault__<assembly>.iam.pdf`), the Item Master (`EBOM_<assembly>.xlsx`), and — if
+  present — the long-lead parts list (`PNxxxx_LLDBO.xlsx`) inside it
+- loads whatever it finds, runs the comparisons, and writes `BOM-compare-results_<SPN>_<PN>.xlsx`
+  straight back into that same folder — no download dialog. The LLDBO file is optional; its
+  absence isn't treated as a problem
+- if a required file is missing or there's more than one candidate, that side is left for you
+  to drop in manually via the normal upload boxes, which always work regardless
 
 Firefox and Safari don't support this API — the button is hidden there and a note explains
 why; the manual dropzones are the fallback and work in every browser.
@@ -125,6 +128,30 @@ The downloadable QC report includes a full copy of the Item Master with the flag
 Title/Description/Material cells **actually highlighted** (real cell fills, not just a
 separate list) — this needed a different Excel library; see the vendoring note below.
 
+## Long-Lead Parts (LLDBO)
+
+Optional — drop a `PNxxxx_LLDBO` file (its own dropzone, below the Item Master QC panel).
+Long-lead direct-bought-out parts are released to procurement ahead of the normal BOM
+release, to cover supplier lead times; this checks that each one actually made it into the
+Item Master once both files are loaded (in either order):
+
+- **Missing from Item Master**: a long-lead part number that was released early but never
+  showed up in the Item Master — the process failure this check exists to catch, since it
+  means the part may quietly never get ordered through the normal channel either.
+- **Quantity mismatches**: the long-lead quantity — summed across all its LLDBO rows, since
+  the same catalog part legitimately appears more than once (e.g. the same motor used in two
+  different assemblies) — should equal the Item Master's rolled-up total for that part.
+- **Project key mismatch warning**: the LLDBO document's own header carries the SPN/PN
+  project key (same convention as the Item Master's), read from its "DBO Doc No" line. If it
+  doesn't match the loaded Item Master's key, a warning appears before any findings, since
+  the more likely explanation is the wrong pair of files was loaded, not real inconsistencies.
+- Rows without a Part No yet (not-yet-specified placeholders — seen in the real sample
+  document) are counted separately and not treated as findings.
+
+Deliberately **not** routed through the generic CAD file auto-detector: its "PART NO"/"Qty."
+headers would otherwise false-match the CAD leveled-table keyword list and get misparsed as
+a CAD BOM.
+
 ## Development
 
 No build step; plain HTML/CSS/JS. Libraries are vendored in `vendor/`
@@ -139,9 +166,11 @@ js/parsers/itemmaster.js  Item Master Excel parser
 js/parsers/cad-flat-xlsx.js  flat Vault paste parser
 js/parsers/cad-leveled.js    leveled table parser (PDF grid / Excel / CSV)
 js/parsers/pdf-extract.js    pdf.js Vault-report table reconstruction
+js/parsers/lldbo.js          LLDBO (long-lead parts) list parser
 js/parsers/detect.js         format detection / role validation
 js/imqc.js                Item Master data-quality checks (no DOM)
 js/imqc-export.js         styled "data quality" export sheet (real cell fills)
+js/lldbo-compare.js       LLDBO vs Item Master comparison (no DOM)
 js/folder.js              folder auto-load classification/scan (no DOM)
 js/app.js                 UI wiring
 ```
@@ -162,7 +191,7 @@ npm install     # once, for the PDF tests (pdfjs-dist, pinned to the vendored ve
 node test/run-tests.mjs                                # synthetic tests only
 node test/run-tests.mjs CAD_Bom.xlsx Item_Master.xls   # + flat-export baseline
 node test/run-tests.mjs CAD_Bom.xlsx Item_Master.xls Vault_723.pdf Vault_732.pdf Inventor_732.xlsx \
-  Vault_733.pdf Item_Master_733.xls                    # + PDF & reference baselines
+  Vault_733.pdf Item_Master_733.xls PNxxxx_LLDBO.xlsx  # + PDF, reference & LLDBO baselines
 ```
 
 Real BOM exports are not committed (potentially sensitive data); pass their paths as
