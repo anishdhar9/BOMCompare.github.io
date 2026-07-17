@@ -23,6 +23,7 @@ const { itemMasterParser } = require(path.join(rootDir, 'js/parsers/itemmaster.j
 const { cadFlatParser } = require(path.join(rootDir, 'js/parsers/cad-flat-xlsx.js'));
 const { cadLeveledParser } = require(path.join(rootDir, 'js/parsers/cad-leveled.js'));
 const { detect } = require(path.join(rootDir, 'js/parsers/detect.js'));
+const { imQc } = require(path.join(rootDir, 'js/imqc.js'));
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -166,6 +167,47 @@ console.log('\n== synthetic: reference items (structure vs intended BOM) ==');
   check('qty taken from bom source', res.hasQty === true);
 }
 
+console.log('\n== synthetic: Item Master QC checks ==');
+{
+  // header includes Producer / Producer Number / Entity Icon so all 4 checks
+  // are applicable; one deliberate failure planted per check.
+  const aoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity', 'Item Qty', 'Producer', 'Producer Number', 'Entity Icon'],
+    ['MACH-01', '-', 'Machine', 'SPN000111_PN00222_ACME CORP', '-', '-', 'SPN000111', '00222', 'Normal'],
+    ['7-909-00001', '1', 'END OF LINE', 'END OF LINE', '1 Each', '1', '', '', 'Normal'],
+    ['PART-A', '1.1', 'Part A', 'desc', '2 Each', '2', '', '', 'Normal'],
+    ['PART-B', '1.2', 'Part B (qty edited, Item Qty stale)', 'desc', '5 Each', '3', '', '', 'Normal'],
+    ['PART-C', '1.3', 'Part C (bad icon)', 'desc', '1 Each', '1', '', '', 'Reference'],
+    ['7-909-00002', '1.4', 'not really end of line but matches text END OF LINE', 'desc', '1 Each', '1', '', '', 'Normal'],
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => aoa },
+  });
+  check('IM parsed with QC columns', !!im && im.hasProducer === true && im.hasEntityIcon === true);
+  check('projectKey from root Producer/Producer Number', im.projectKey && im.projectKey.spn === 'SPN000111' && im.projectKey.pn === 'PN00222', im.projectKey);
+
+  const qc = imQc.runChecks(im);
+  check('c1 producer match passes (SPN000111 + 00222 both in description)', qc.c1.applicable === true && qc.c1.fail.length === 0, qc.c1);
+  check('c2 flags the second "END OF LINE"-text row with wrong number', qc.c2.found === 2 && qc.c2.fail.length === 1 && qc.c2.fail[0].number === '7-909-00002', qc.c2);
+  check('c3 flags PART-B only', qc.c3.applicable === true && qc.c3.fail.length === 1 && qc.c3.fail[0].number === 'PART-B', qc.c3.fail);
+  check('c4 flags PART-C only', qc.c4.applicable === true && qc.c4.fail.length === 1 && qc.c4.fail[0].number === 'PART-C', qc.c4.fail);
+
+  // no Producer/Entity Icon columns at all -> both checks report not-applicable, not mass-fail
+  const bareAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Item Qty'],
+    ['MACH-02', '-', 'Machine 2', 'SPN000333_PN00444, some customer', '-'],
+    ['PART-X', '1', 'Part X', 'desc', '1'],
+  ];
+  const bareIm = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => bareAoa },
+  });
+  check('bare export: hasProducer/hasEntityIcon false', bareIm.hasProducer === false && bareIm.hasEntityIcon === false);
+  check('projectKey falls back to description regex', bareIm.projectKey && bareIm.projectKey.spn === 'SPN000333' && bareIm.projectKey.pn === 'PN00444', bareIm.projectKey);
+  const bareQc = imQc.runChecks(bareIm);
+  check('c1 not-applicable without Producer column (not mass-fail)', bareQc.c1.applicable === false, bareQc.c1);
+  check('c4 not-applicable without Entity Icon column (not mass-fail)', bareQc.c4.applicable === false, bareQc.c4);
+}
+
 /* ---------------- real-sample baseline tests ---------------- */
 
 const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path] = process.argv.slice(2);
@@ -191,6 +233,16 @@ if (cadPath && imPath) {
   const imUnique = new Set(im.rows.map(r => r.number.toUpperCase()));
   check('IM unique PNs = 1076', imUnique.size === 1076, imUnique.size);
   check('IM has paths', im.hasPaths === true);
+  check('IM projectKey = SPN016823 / PN22426', im.projectKey && im.projectKey.spn === 'SPN016823' && im.projectKey.pn === 'PN22426', im.projectKey);
+
+  console.log('\n== real samples: HSG Item Master QC ==');
+  const hsgQc = imQc.runChecks(im);
+  check('HSG c1 producer match: no failures', hsgQc.c1.applicable === true && hsgQc.c1.fail.length === 0, hsgQc.c1.fail);
+  check('HSG c2 end of line: found and clean', hsgQc.c2.found === 1 && hsgQc.c2.fail.length === 0, hsgQc.c2);
+  check('HSG c3 qty vs item qty: exactly 4 real mismatches', hsgQc.c3.applicable === true &&
+    JSON.stringify(hsgQc.c3.fail.map(f => f.number).sort()) === JSON.stringify(['2-999-06110', '2-999-97034', '7-238-23791', '7-999-01282']),
+    hsgQc.c3.fail.map(f => f.number));
+  check('HSG c4 entity icon: not applicable (column absent)', hsgQc.c4.applicable === false, hsgQc.c4);
 
   const cadRes = detect.parseCadFromWorkbook(cadWb, XLSX);
   check('CAD parsed via flat parser', !!(cadRes && cadRes.ok && cadRes.ok.source === 'flat-xlsx'), cadRes && cadRes.ok && cadRes.ok.source);
@@ -316,6 +368,11 @@ if (pdf733Path && im733Path) {
     const im733 = detect.parseItemMasterFromWorkbook(im733Wb, XLSX);
     check('733 IM parsed with 194 rows and dotted Row Order paths', !!im733 && im733.rows.length === 194 && im733.hasPaths === true,
       im733 && { rows: im733.rows.length, hasPaths: im733.hasPaths });
+    check('733 IM projectKey = SPN016808 / PN22752', im733.projectKey && im733.projectKey.spn === 'SPN016808' && im733.projectKey.pn === 'PN22752', im733.projectKey);
+
+    const labQc = imQc.runChecks(im733);
+    check('733 c3 qty vs item qty: 0 mismatches', labQc.c3.applicable === true && labQc.c3.fail.length === 0, labQc.c3.fail);
+    check('733 c4 entity icon: not applicable (column absent)', labQc.c4.applicable === false, labQc.c4);
 
     const res733 = compareAll([p733], im733);
     check('733: 24 missing PNs / 22 actionable findings', res733.missingTotal === 24 && res733.actionableCount === 22,

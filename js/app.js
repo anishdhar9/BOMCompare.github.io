@@ -13,11 +13,21 @@
   const state = {
     cadSources: [],     // parsed CAD results (max 2: full structure + intended BOM)
     im: null,           // parsed Item Master result (+ fileName)
+    imQc: null,         // js/imqc.js runChecks() result for state.im
     result: null,
     activeTab: 'missing',
     filter: '',
     mappingCtx: null,   // { aoa, indents, source, analysis, fileName }
   };
+
+  // Base name suffix from the Item Master's SPN/PN project key, e.g.
+  // '_SPN016823_PN22426'. Empty string when no key was found.
+  function projectKeySuffix() {
+    const key = state.im && state.im.projectKey;
+    if (!key) return '';
+    const parts = [key.spn, key.pn].filter(Boolean);
+    return parts.length ? '_' + parts.join('_') : '';
+  }
 
   // The two roles a CAD file can play; a new upload replaces the previous
   // file of the same role, so at most one of each is kept.
@@ -186,7 +196,7 @@
         }
       } catch (e) {
         if (role === 'cad') renderCadSources('', file.name + ': ' + (e.message || String(e)));
-        else { state.im = null; setImStatus(file.name, [], e.message || String(e)); }
+        else { state.im = null; state.imQc = null; hideImQc(); setImStatus(file.name, [], e.message || String(e)); }
       }
     }
     updateCompareButton();
@@ -204,6 +214,8 @@
     im.fileName = file.name;
     state.im = im;
     setImStatus(file.name, chipsFor(im), '');
+    state.imQc = BC.imQc.runChecks(im);
+    renderImQc();
   }
 
   function handleCadWorkbook(file, wb) {
@@ -362,6 +374,121 @@
     el.textContent = text;
     $('notices').appendChild(el);
   }
+
+  /* ---------------- Item Master QC panel ---------------- */
+
+  const QC_CHECKS = [
+    { key: 'c1', title: 'Producer ↔ Description Match (top-level row only)',
+      desc: 'The top-level row’s Producer and Producer Number should appear inside its Description.',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['producer', 'Producer'], ['producerNumber', 'Producer Number'], ['description', 'Description']] },
+    { key: 'c2', title: 'End of Line Integrity',
+      desc: 'The "END OF LINE" entry should have Number ' + BC.imQc.END_OF_LINE_NUMBER + ' and a whole-number Row Order.',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['issue', 'Issue']] },
+    { key: 'c3', title: 'Quantity vs Item Qty',
+      desc: 'The numeric value inside Quantity should equal Item Qty on every row — a mismatch usually means one was edited manually without updating the other.',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['title', 'Title'], ['quantity', 'Quantity'], ['itemQty', 'Item Qty']] },
+    { key: 'c4', title: 'Entity Icon Status',
+      desc: 'Every row’s Entity Icon should read "Normal".',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['icon', 'Entity Icon']] },
+  ];
+
+  function hideImQc() {
+    $('im-qc').classList.add('hidden');
+    $('qc-summary').innerHTML = '';
+    $('qc-sections').innerHTML = '';
+  }
+
+  function qcCardFor(check, result) {
+    const cls = !result.applicable ? 'na' : (result.fail.length ? 'fail' : 'pass');
+    const num = !result.applicable ? 'N/A' : (result.fail.length ? String(result.fail.length) : 'PASS');
+    const sub = !result.applicable ? result.reason : (result.fail.length ? 'flagged' : 'clean');
+    const el = document.createElement('div');
+    el.className = 'card ' + cls;
+    el.innerHTML = '<div class="num"></div><div class="lbl"></div>';
+    el.querySelector('.num').textContent = num;
+    el.querySelector('.lbl').textContent = check.title.replace(/\s*\(.*\)$/, '') + ' — ' + sub;
+    return el;
+  }
+
+  function qcSectionFor(check, result) {
+    const box = document.createElement('div');
+    box.className = 'qc-section';
+    const head = document.createElement('div');
+    head.className = 'qc-section-head';
+    const titleBox = document.createElement('div');
+    titleBox.innerHTML = '<div class="qc-section-title"></div><p class="qc-section-desc"></p>';
+    titleBox.querySelector('.qc-section-title').textContent = check.title;
+    titleBox.querySelector('.qc-section-desc').textContent = check.desc;
+    head.appendChild(titleBox);
+    const pill = document.createElement('span');
+    pill.className = 'qc-pill ' + (!result.applicable ? 'na' : (result.fail.length ? 'fail' : 'pass'));
+    pill.textContent = !result.applicable ? 'N/A' : (result.fail.length ? result.fail.length + ' FLAGGED' : 'OK');
+    head.appendChild(pill);
+    box.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'qc-section-body';
+    if (!result.applicable) {
+      body.innerHTML = '<div class="empty-state">' + result.reason + '</div>';
+    } else if (!result.fail.length) {
+      body.innerHTML = '<div class="empty-state">✓ No issues found' + (check.key === 'c1' && result.applicableCount ? ' across ' + result.applicableCount + ' applicable row(s)' : '') + '.</div>';
+    } else {
+      const table = document.createElement('table');
+      table.className = 'results-table';
+      const htr = document.createElement('tr');
+      for (const [, label] of check.cols) addTh(htr, label);
+      table.appendChild(htr);
+      for (const row of result.fail) {
+        const tr = document.createElement('tr');
+        for (const [key] of check.cols) addTd(tr, row[key]);
+        table.appendChild(tr);
+      }
+      body.appendChild(table);
+      body.classList.add('open');
+    }
+    box.appendChild(body);
+
+    head.addEventListener('click', function () { body.classList.toggle('open'); });
+    return box;
+  }
+
+  function renderImQc() {
+    const qc = state.imQc;
+    if (!qc) { hideImQc(); return; }
+    $('im-qc').classList.remove('hidden');
+    const summary = $('qc-summary');
+    summary.innerHTML = '';
+    const sections = $('qc-sections');
+    sections.innerHTML = '';
+    for (const check of QC_CHECKS) {
+      const result = qc[check.key];
+      summary.appendChild(qcCardFor(check, result));
+      sections.appendChild(qcSectionFor(check, result));
+    }
+  }
+
+  // AOA rows for the "Item Master QC" export sheet, shared by the main
+  // Compare export and the standalone QC-only export.
+  function qcSheetRows(qc) {
+    const rows = [['Item Master data quality checks', '']];
+    for (const check of QC_CHECKS) {
+      const result = qc[check.key];
+      rows.push([]);
+      rows.push([check.title, !result.applicable ? 'N/A — ' + result.reason : (result.fail.length ? result.fail.length + ' flagged' : 'OK')]);
+      if (result.applicable && result.fail.length) {
+        rows.push(check.cols.map(function (c) { return c[1]; }));
+        for (const row of result.fail) rows.push(check.cols.map(function (c) { return row[c[0]]; }));
+      }
+    }
+    return rows;
+  }
+
+  $('btn-qc-export').addEventListener('click', function () {
+    if (!state.imQc) return;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
+    XLSX.writeFile(wb, 'ItemMaster-QC-report' + projectKeySuffix() + '.xlsx');
+  });
 
   /* ---------------- compare & render ---------------- */
 
@@ -874,7 +1001,11 @@
     for (const r of res.imOnly) imonly.push([r.number, r.title, r.description, r.qty, r.rowType || '']);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(imonly), 'In Item Master only');
 
-    XLSX.writeFile(wb, 'BOM-compare-results.xlsx');
+    if (state.imQc) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
+    }
+
+    XLSX.writeFile(wb, 'BOM-compare-results' + projectKeySuffix() + '.xlsx');
   });
 
   /* ---------------- dropzone wiring ---------------- */
