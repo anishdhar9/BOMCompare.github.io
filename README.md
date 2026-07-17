@@ -81,7 +81,9 @@ quantity roll-up; `Item Qty`/`Quantity` enables quantity comparison.
 ## Development
 
 No build step; plain HTML/CSS/JS. Libraries are vendored in `vendor/`
-(SheetJS for Excel, pdf.js for PDFs) so the app works on locked-down networks.
+(`xlsx.full.min.js` is [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style) — a
+drop-in, style-writing-capable fork of SheetJS 0.18.5, needed so the exported workbooks can
+carry real cell highlighting; pdf.js for PDFs) so the app works on locked-down networks.
 npm packages are used by the Node tests only.
 
 ```

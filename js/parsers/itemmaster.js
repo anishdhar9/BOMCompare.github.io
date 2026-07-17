@@ -5,9 +5,9 @@
  *
  * Produces: { kind:'itemmaster', rows:[{number,title,description,qty,
  *             itemQty,quantity,quantityText,producer,producerNumber,
- *             entityIcon,path,rowType,sourceRow}], hasPaths, hasEntityIcon,
- *             hasProducer, projectKey:{spn,pn}|null, sheetName, columns,
- *             warnings }
+ *             entityIcon,material,path,rowType,sourceRow}], hasPaths,
+ *             hasEntityIcon, hasProducer, hasMaterial,
+ *             projectKey:{spn,pn}|null, sheetName, columns, warnings }
  *
  * `qty` is the resolved quantity used by compare.js's roll-up (Item Qty
  * preferred, Quantity as fallback). `itemQty`/`quantity` are kept separate
@@ -71,6 +71,7 @@
           producer: find(function (h) { return h === 'producer'; }),
           producerNumber: find(function (h) { return h === 'producer number'; }),
           entityIcon: find(function (h) { return h === 'entity icon'; }),
+          material: find(function (h) { return h === 'material'; }),
         },
       };
     }
@@ -131,6 +132,7 @@
           producer: hdr.cols.producer >= 0 ? cellText(row[hdr.cols.producer]) : '',
           producerNumber: hdr.cols.producerNumber >= 0 ? cellText(row[hdr.cols.producerNumber]) : '',
           entityIcon: hdr.cols.entityIcon >= 0 ? cellText(row[hdr.cols.entityIcon]) : '',
+          material: hdr.cols.material >= 0 ? cellText(row[hdr.cols.material]) : '',
           path: hdr.cols.path >= 0 ? parsePath(row[hdr.cols.path]) : null,
           rowType: hdr.cols.rowType >= 0 ? cellText(row[hdr.cols.rowType]) : '',
           sourceRow: r + 1,
@@ -151,6 +153,7 @@
         hasPaths: hasPaths,
         hasProducer: hdr.cols.producer >= 0 || hdr.cols.producerNumber >= 0,
         hasEntityIcon: hdr.cols.entityIcon >= 0,
+        hasMaterial: hdr.cols.material >= 0,
         projectKey: extractProjectKey(rootRow),
         columns: hdr.cols,
         warnings: warnings,

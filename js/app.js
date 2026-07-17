@@ -377,6 +377,21 @@
 
   /* ---------------- Item Master QC panel ---------------- */
 
+  function qcKindLabel(kind) {
+    return {
+      'both-missing': 'Title AND Description both blank',
+      'title-missing': 'Title blank',
+      'description-missing': 'Description blank',
+    }[kind] || kind;
+  }
+
+  // cols entries are [dataKey, columnLabel, formatter?] — formatter(value, row)
+  // defaults to the raw value.
+  function qcCellValue(col, row) {
+    const value = row[col[0]];
+    return col[2] ? col[2](value, row) : value;
+  }
+
   const QC_CHECKS = [
     { key: 'c1', title: 'Producer ↔ Description Match (top-level row only)',
       desc: 'The top-level row’s Producer and Producer Number should appear inside its Description.',
@@ -390,12 +405,20 @@
     { key: 'c4', title: 'Entity Icon Status',
       desc: 'Every row’s Entity Icon should read "Normal".',
       cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['icon', 'Entity Icon']] },
+    { key: 'c5', title: 'Title / Description Completeness',
+      desc: 'Every row should have a Title and Description. Purchased/catalog parts (X-999-…) are only flagged when both are blank; other parts are flagged if either is missing.',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['title', 'Title'], ['description', 'Description'], ['kind', 'Issue', qcKindLabel]] },
+    { key: 'c6', title: 'Material Completeness',
+      desc: 'Every non-assembly row should have a Material. Assemblies/weldments are excluded (they legitimately carry no material of their own).',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['title', 'Title']] },
   ];
 
   function hideImQc() {
     $('im-qc').classList.add('hidden');
     $('qc-summary').innerHTML = '';
     $('qc-sections').innerHTML = '';
+    $('qc-callout').classList.add('hidden');
+    $('qc-callout').textContent = '';
   }
 
   function qcCardFor(check, result) {
@@ -440,7 +463,7 @@
       table.appendChild(htr);
       for (const row of result.fail) {
         const tr = document.createElement('tr');
-        for (const [key] of check.cols) addTd(tr, row[key]);
+        for (const col of check.cols) addTd(tr, qcCellValue(col, row));
         table.appendChild(tr);
       }
       body.appendChild(table);
@@ -465,6 +488,22 @@
       summary.appendChild(qcCardFor(check, result));
       sections.appendChild(qcSectionFor(check, result));
     }
+
+    const callout = $('qc-callout');
+    const bits = [];
+    if (qc.c5.applicable && qc.c5.fail.length) {
+      bits.push(qc.c5.fail.length + ' row(s) need Title and/or Description populated');
+    }
+    if (qc.c6.applicable && qc.c6.fail.length) {
+      bits.push(qc.c6.fail.length + ' part(s) need Material populated');
+    }
+    if (bits.length) {
+      callout.textContent = '⚠ ' + bits.join(' · ') + ' — see below, or download the QC report for a highlighted copy of the Item Master.';
+      callout.classList.remove('hidden');
+    } else {
+      callout.textContent = '';
+      callout.classList.add('hidden');
+    }
   }
 
   // AOA rows for the "Item Master QC" export sheet, shared by the main
@@ -477,16 +516,23 @@
       rows.push([check.title, !result.applicable ? 'N/A — ' + result.reason : (result.fail.length ? result.fail.length + ' flagged' : 'OK')]);
       if (result.applicable && result.fail.length) {
         rows.push(check.cols.map(function (c) { return c[1]; }));
-        for (const row of result.fail) rows.push(check.cols.map(function (c) { return row[c[0]]; }));
+        for (const row of result.fail) rows.push(check.cols.map(function (c) { return qcCellValue(c, row); }));
       }
     }
     return rows;
+  }
+
+  // Delegates to js/imqc-export.js (shared with the Node test suite, which
+  // asserts the fills actually round-trip through a real .xlsx).
+  function buildStyledImSheet(im, qc) {
+    return BC.imQcExport.buildStyledImSheet(XLSX, im, qc);
   }
 
   $('btn-qc-export').addEventListener('click', function () {
     if (!state.imQc) return;
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
+    XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
     XLSX.writeFile(wb, 'ItemMaster-QC-report' + projectKeySuffix() + '.xlsx');
   });
 
@@ -1003,6 +1049,7 @@
 
     if (state.imQc) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
+      XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
     }
 
     XLSX.writeFile(wb, 'BOM-compare-results' + projectKeySuffix() + '.xlsx');

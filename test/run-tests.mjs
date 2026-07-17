@@ -24,6 +24,7 @@ const { cadFlatParser } = require(path.join(rootDir, 'js/parsers/cad-flat-xlsx.j
 const { cadLeveledParser } = require(path.join(rootDir, 'js/parsers/cad-leveled.js'));
 const { detect } = require(path.join(rootDir, 'js/parsers/detect.js'));
 const { imQc } = require(path.join(rootDir, 'js/imqc.js'));
+const { imQcExport } = require(path.join(rootDir, 'js/imqc-export.js'));
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -208,6 +209,53 @@ console.log('\n== synthetic: Item Master QC checks ==');
   check('c4 not-applicable without Entity Icon column (not mass-fail)', bareQc.c4.applicable === false, bareQc.c4);
 }
 
+console.log('\n== synthetic: Title/Description completeness (c5) + Material completeness (c6) ==');
+{
+  const aoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Material'],
+    ['MACH-01', '-', 'Machine', 'desc', ''],
+    ['7-999-PURCH-1', '1', 'Purchased part 1', '', 'AISI 304'],       // purchased, desc blank -> leniency, no flag
+    ['7-999-PURCH-2', '2', '', '', 'AISI 304'],                       // purchased, both blank -> flagged
+    ['MFG-PART-1', '3', 'Manufactured part 1', '', 'AISI 304'],       // non-purchased, desc blank -> flagged
+    ['MFG-PART-2', '4', '', 'Manufactured part 2 desc', 'AISI 304'],  // non-purchased, title blank -> flagged
+    ['ASSY-1', '5', 'Assembly 1', 'desc', ''],                        // has a child below -> assembly, material excluded
+    ['ASSY-1-CHILD', '5.1', 'Assy child', 'desc', ''],                // leaf, material blank -> flagged
+    ['LEAF-2', '6', 'Leaf 2', 'desc', 'AISI 316L'],                   // leaf, material present -> not flagged
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => aoa },
+  });
+  check('IM parsed with Material column', im.hasMaterial === true);
+  const qc = imQc.runChecks(im);
+
+  check('c5 flags exactly 3 rows', qc.c5.fail.length === 3, qc.c5.fail.map(f => f.number));
+  check('c5: purchased part with one blank field is NOT flagged (leniency)',
+    !qc.c5.fail.some(f => f.number === '7-999-PURCH-1'));
+  check('c5: purchased part with both blank IS flagged as both-missing',
+    qc.c5.fail.some(f => f.number === '7-999-PURCH-2' && f.kind === 'both-missing'));
+  check('c5: non-purchased part missing description flagged correctly',
+    qc.c5.fail.some(f => f.number === 'MFG-PART-1' && f.kind === 'description-missing'));
+  check('c5: non-purchased part missing title flagged correctly',
+    qc.c5.fail.some(f => f.number === 'MFG-PART-2' && f.kind === 'title-missing'));
+
+  check('c6 flags exactly 1 row', qc.c6.applicable === true && qc.c6.fail.length === 1, qc.c6.fail);
+  check('c6: assembly with children is excluded despite blank material',
+    !qc.c6.fail.some(f => f.number === 'ASSY-1'));
+  check('c6: leaf part with blank material IS flagged',
+    qc.c6.fail.some(f => f.number === 'ASSY-1-CHILD'));
+  check('c6: root row excluded (always counts as assembly)',
+    !qc.c6.fail.some(f => f.number === 'MACH-01'));
+
+  // no Material column at all -> not-applicable, not mass-fail
+  const noMatAoa = aoa.map(r => r.slice(0, 4)); // drop the Material column
+  const noMatIm = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => noMatAoa },
+  });
+  check('no Material column -> hasMaterial false', noMatIm.hasMaterial === false);
+  const noMatQc = imQc.runChecks(noMatIm);
+  check('c6 not-applicable without Material column (not mass-fail)', noMatQc.c6.applicable === false, noMatQc.c6);
+}
+
 /* ---------------- real-sample baseline tests ---------------- */
 
 const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path] = process.argv.slice(2);
@@ -243,6 +291,51 @@ if (cadPath && imPath) {
     JSON.stringify(hsgQc.c3.fail.map(f => f.number).sort()) === JSON.stringify(['2-999-06110', '2-999-97034', '7-238-23791', '7-999-01282']),
     hsgQc.c3.fail.map(f => f.number));
   check('HSG c4 entity icon: not applicable (column absent)', hsgQc.c4.applicable === false, hsgQc.c4);
+  check('HSG c5 title/desc: 49 flagged (all description-missing on non-purchased parts)',
+    hsgQc.c5.fail.length === 49 && hsgQc.c5.fail.every(f => f.kind === 'description-missing'), hsgQc.c5.fail.length);
+  check('HSG c6 material: 111 non-assembly parts flagged', hsgQc.c6.applicable === true && hsgQc.c6.fail.length === 111, hsgQc.c6.fail.length);
+
+  console.log('\n== real samples: styled QC export (Item Master — data quality sheet) ==');
+  const styledWs = imQcExport.buildStyledImSheet(XLSX, im, hsgQc);
+  const styledWb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(styledWb, styledWs, 'Item Master — data quality');
+  const styledBuf = XLSX.write(styledWb, { bookType: 'xlsx', type: 'buffer' });
+  // Re-read with cellStyles so the actual round-trip through a real .xlsx is
+  // verified, not just that the in-memory worksheet object carries `.s`.
+  const reRead = XLSX.read(styledBuf, { type: 'buffer', cellStyles: true });
+  const reSheet = reRead.Sheets['Item Master — data quality'];
+  const reAoa = XLSX.utils.sheet_to_json(reSheet, { header: 1 });
+  check('styled export re-parses with correct headers and row count',
+    reAoa[0].join(',') === 'Number,Row Order,Title,Description,Material,Producer,Producer Number,Item Qty,Quantity' &&
+    reAoa.length === im.rows.length + 1,
+    { header: reAoa[0], rows: reAoa.length });
+
+  // find the sheet row for one known c5 (description-missing) failure and
+  // one known c6 (material-missing) failure, and assert the fill survived.
+  const c5Example = hsgQc.c5.fail[0];
+  const c5Row = im.rows.findIndex(r => r.sourceRow === c5Example.sourceRow) + 1; // +1 for header
+  const c5DescCell = reSheet[XLSX.utils.encode_cell({ c: 3, r: c5Row })]; // Description is col index 3
+  check('c5-flagged Description cell carries the amber fill after round-trip',
+    !!c5DescCell && !!c5DescCell.s && c5DescCell.s.fgColor && c5DescCell.s.fgColor.rgb === 'FDF3E1',
+    c5DescCell && c5DescCell.s);
+
+  const c6Example = hsgQc.c6.fail[0];
+  const c6Row = im.rows.findIndex(r => r.sourceRow === c6Example.sourceRow) + 1;
+  const c6MatCell = reSheet[XLSX.utils.encode_cell({ c: 4, r: c6Row })]; // Material is col index 4
+  check('c6-flagged Material cell carries the red fill after round-trip',
+    !!c6MatCell && !!c6MatCell.s && c6MatCell.s.fgColor && c6MatCell.s.fgColor.rgb === 'FDECEC',
+    c6MatCell && c6MatCell.s);
+
+  // sanity: an un-flagged cell should carry no *solid* fill (SheetJS attaches
+  // a default {patternType:'none'} style object to every cell on read, so
+  // absence of a solid pattern — not absence of `.s` entirely — is the
+  // correct "not highlighted" signal).
+  const cleanRowIdx = im.rows.findIndex(r =>
+    !hsgQc.c5.fail.some(f => f.sourceRow === r.sourceRow) && !hsgQc.c6.fail.some(f => f.sourceRow === r.sourceRow));
+  const cleanCell = reSheet[XLSX.utils.encode_cell({ c: 4, r: cleanRowIdx + 1 })];
+  check('un-flagged Material cell carries no solid fill',
+    !cleanCell || !cleanCell.s || cleanCell.s.patternType !== 'solid',
+    cleanCell && cleanCell.s);
 
   const cadRes = detect.parseCadFromWorkbook(cadWb, XLSX);
   check('CAD parsed via flat parser', !!(cadRes && cadRes.ok && cadRes.ok.source === 'flat-xlsx'), cadRes && cadRes.ok && cadRes.ok.source);

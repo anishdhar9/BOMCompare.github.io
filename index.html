@@ -55,6 +55,7 @@
         <button type="button" class="btn btn-small" id="btn-qc-export">Download QC report</button>
       </div>
       <div class="summary" id="qc-summary"></div>
+      <p class="notice warn hidden" id="qc-callout"></p>
       <div id="qc-sections"></div>
     </section>
 
@@ -117,7 +118,7 @@
           <li><strong>Reference items</strong> (needs two CAD sources): components in the full CAD structure (PDF or Vault paste) that are absent from the Inventor BOM export — the exact list of what is currently flagged <em>BOM Reference</em> in the model, each marked whether it also made it into the Item Master. Review it to confirm every entry is intentional.</li>
           <li><strong>Quantity mismatches:</strong> rolled-up total quantity per part (own qty × parent assembly quantities, summed over all occurrences) compared between CAD and Item Master. Requires a source with a QTY column — that's the Inventor BOM export; the Vault PDF and flat paste carry no quantities.</li>
           <li><strong>In Item Master only:</strong> items whose number never appears in the CAD BOM — stale or manually added entries worth reviewing.</li>
-          <li><strong>Item Master data quality</strong> (runs the moment the Item Master loads, no CAD BOM required): four checks on the file itself — Producer/Producer Number reflected in the top-level row's Description; the "END OF LINE" entry has the organization's fixed part number and a whole-number Row Order; the Quantity and Item Qty columns agree on every row (catches a manual edit to one that wasn't mirrored to the other); and, when the export includes an Entity Icon column, that it reads "Normal" everywhere.</li>
+          <li><strong>Item Master data quality</strong> (runs the moment the Item Master loads, no CAD BOM required): six checks on the file itself — Producer/Producer Number reflected in the top-level row's Description; the "END OF LINE" entry has the organization's fixed part number and a whole-number Row Order; the Quantity and Item Qty columns agree on every row (catches a manual edit to one that wasn't mirrored to the other); when the export includes an Entity Icon column, that it reads "Normal" everywhere; every row has a Title and Description (purchased/catalog parts, numbered "X-999-…", are only flagged when both are missing); and every non-assembly row has a Material (assemblies/weldments are excluded — they don't carry one). The QC report export includes a full copy of the Item Master with the flagged Title/Description/Material cells actually highlighted, not just listed.</li>
           <li><strong>Export file name:</strong> when the Item Master's top-level row carries the organization's SPN/PN project key (from its Producer / Producer Number columns, or parsed from the Description text), both the comparison export and the QC report include it in the file name.</li>
         </ul>
       </details>
@@ -137,6 +138,7 @@
   <script src="js/parsers/pdf-extract.js"></script>
   <script src="js/parsers/detect.js"></script>
   <script src="js/imqc.js"></script>
+  <script src="js/imqc-export.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
