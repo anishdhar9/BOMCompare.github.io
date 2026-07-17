@@ -168,7 +168,7 @@ console.log('\n== synthetic: reference items (structure vs intended BOM) ==');
 
 /* ---------------- real-sample baseline tests ---------------- */
 
-const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path] = process.argv.slice(2);
+const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path] = process.argv.slice(2);
 let pdfjsLib = null;
 try { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); } catch (e) { /* npm install to enable PDF tests */ }
 
@@ -294,6 +294,41 @@ if (pdf723Path && imPath && cadPath) {
   }
 } else if (pdf723Path || pdf732Path) {
   console.log('\n(PDF tests need the flat CAD xlsx + Item Master paths as the first two arguments)');
+}
+
+if (pdf733Path && im733Path) {
+  if (!pdfjsLib) {
+    console.log('\n(pdfjs-dist not installed — run `npm install` to enable the PDF baseline tests)');
+  } else {
+    console.log('\n== real samples: Vault PDF 7-330-20013 (lab machine, 13 pages) vs Item Master ==');
+    const { grid: g733, parsed: p733 } = await parsePdf(pdf733Path);
+    check('733 PDF: no extraction warnings', (g733.warnings || []).length === 0, g733.warnings);
+    check('733 PDF parsed 226 records', p733.items.length === 226, p733.items.length);
+    check('733 PDF has levels, no qty', p733.hasLevels === true && p733.hasQty === false);
+    const badPn733 = p733.items.filter(i => !/^\d-\d{3}-\S+$/.test(i.number));
+    check('733 PDF: every record has a clean part number', badPn733.length === 0, badPn733.slice(0, 5).map(i => i.number));
+    const lvl733 = {};
+    for (const it of p733.items) lvl733[it.level] = (lvl733[it.level] || 0) + 1;
+    check('733 PDF level histogram matches indentation depth 1-7',
+      JSON.stringify(lvl733) === JSON.stringify({ 1: 1, 2: 44, 3: 64, 4: 63, 5: 25, 6: 13, 7: 16 }), lvl733);
+
+    const im733Wb = XLSX.read(fs.readFileSync(im733Path), { type: 'buffer' });
+    const im733 = detect.parseItemMasterFromWorkbook(im733Wb, XLSX);
+    check('733 IM parsed with 194 rows and dotted Row Order paths', !!im733 && im733.rows.length === 194 && im733.hasPaths === true,
+      im733 && { rows: im733.rows.length, hasPaths: im733.hasPaths });
+
+    const res733 = compareAll([p733], im733);
+    check('733: 24 missing PNs / 22 actionable findings', res733.missingTotal === 24 && res733.actionableCount === 22,
+      { missingTotal: res733.missingTotal, actionableCount: res733.actionableCount });
+    check('733: TENTE castor is a standalone finding', res733.missingRoots.some(n => n.item.number === '7-999-11840' && n.children.length === 0),
+      res733.missingRoots.map(n => n.item.number));
+    const knob = res733.missingRoots.find(n => n.item.number === '7-331-20014');
+    check('733: KNOB groups 1 child', knob && countDescendants(knob) === 1, knob && countDescendants(knob));
+    const pulley = res733.missingRoots.find(n => n.item.number === '7-331-20005');
+    check('733: PULLEY MACHINING groups 1 child', pulley && countDescendants(pulley) === 1, pulley && countDescendants(pulley));
+  }
+} else if (pdf733Path || im733Path) {
+  console.log('\n(the lab-machine PDF test needs both the PDF and its Item Master path)');
 }
 
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nall tests passed');
