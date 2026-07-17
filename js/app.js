@@ -171,6 +171,7 @@
       chips.push({ text: parsed.items.length + ' components' });
       chips.push({ text: parsed.hasQty ? 'quantities ✓' : 'no quantities', kind: parsed.hasQty ? '' : 'warn' });
       chips.push({ text: parsed.hasLevels ? 'levels ✓' : 'no levels', kind: parsed.hasLevels ? '' : 'warn' });
+      if (parsed.hasMaterial) chips.push({ text: 'material ✓', kind: 'good' });
     }
     if (parsed.warnings && parsed.warnings.length) {
       chips.push({ text: parsed.warnings.length + ' note(s)', kind: 'warn', title: parsed.warnings.join('\n') });
@@ -1532,8 +1533,9 @@
 
     const cadMsg = await loadFolderMatch(found['cad-pdf'], 'CAD BOM PDF', function (f) { return handleFiles('cad', [f]); }, false);
     const imMsg = await loadFolderMatch(found['item-master'], 'Item Master (EBOM_*)', function (f) { return handleFiles('im', [f]); }, false);
+    const invMsg = await loadFolderMatch(found['inventor-bom'], 'Inventor BOM export (INVENTOR_BOM_*)', function (f) { return handleFiles('cad', [f]); }, true);
     const lldboMsg = await loadFolderMatch(found['lldbo'], 'LLDBO file', handleLldboFile, true);
-    const matchSummary = '"' + handle.name + '" — CAD: ' + cadMsg + ' · Item Master: ' + imMsg + ' · LLDBO: ' + lldboMsg;
+    const matchSummary = '"' + handle.name + '" — CAD: ' + cadMsg + ' · Item Master: ' + imMsg + ' · Inventor BOM: ' + invMsg + ' · LLDBO: ' + lldboMsg;
     folderStatus(matchSummary);
 
     if (state.cadSources.length && state.im) {

@@ -30,11 +30,12 @@ click **📁 Load from folder**, pick the PNxxxx project folder once in the nati
 and everything else is automatic:
 
 - finds the CAD BOM (`Autodesk Vault- <assembly>.pdf`, or Vault's own default naming
-  `Autodesk_Vault__<assembly>.iam.pdf`), the Item Master (`EBOM_<assembly>.xlsx`), and — if
+  `Autodesk_Vault__<assembly>.iam.pdf`), the Item Master (`EBOM_<assembly>.xlsx`), the
+  Inventor BOM export (`INVENTOR_BOM_<assembly>.xlsx`, optional second CAD source), and — if
   present — the long-lead parts list (`PNxxxx_LLDBO.xlsx`) inside it
 - loads whatever it finds, runs the comparisons, and writes `BOM-compare-results_<SPN>_<PN>.xlsx`
-  straight back into that same folder — no download dialog. The LLDBO file is optional; its
-  absence isn't treated as a problem
+  straight back into that same folder — no download dialog. The Inventor BOM export and the
+  LLDBO file are both optional; their absence isn't treated as a problem
 - if a required file is missing or there's more than one candidate, that side is left for you
   to drop in manually via the normal upload boxes, which always work regardless
 
@@ -49,12 +50,14 @@ Inventor BOM **export (.xlsx)**. They are complementary:
 | Reference components | **included** | excluded |
 | Virtual components (no CAD file) | missing | **included** |
 | Quantities | no | **yes** |
+| Material | no | **when the column is included** (Vault columns are user-configurable, so this varies by export) |
 | Hierarchy | indentation | dotted Item numbers |
 
 With both, the app additionally shows the **Reference items** tab: the exact list of
 components currently flagged *BOM Reference* in the model (PDF minus Inventor export),
 each marked whether it made it into the Item Master — the direct review list for
-"was this meant to be reference?".
+"was this meant to be reference?". And when the Inventor export includes a Material
+column, it also activates the **Material: CAD vs Item Master** check (see below).
 
 ## Supported input formats
 
@@ -140,9 +143,11 @@ Item Master material and CAD material side by side, mismatches/missing material 
 informational, never counted toward any flagged total.
 
 For manufactured (non-purchased) parts, a genuine **Material: CAD vs Item Master** check
-compares material values — only active once a CAD source that actually carries material is
-loaded (the flat Vault Excel paste; neither the multi-level PDF nor the Inventor BOM export
-has a material column). A raw string comparison is unusable: verified that of 518 shared
+compares material values — only active once a loaded CAD source actually carries material
+data. The multi-level PDF never does; the flat Vault Excel paste and the Inventor BOM export
+both *can*, since Vault's exported columns are user-configurable (whichever visible columns
+were selected when the export was made) — the app detects this per file (`hasMaterial`)
+rather than assuming it from the file format. A raw string comparison is unusable: verified that of 518 shared
 manufactured part numbers in a real sample, 38 "differ" as plain text and every one of them
 is a naming-convention variant of the same material (`1.4301` = `AISI 304`, DIN vs AISI
 grade designation; `AISI 316L` vs `AISI 316 L`, spacing only; `SS316L` vs `AISI316L`,

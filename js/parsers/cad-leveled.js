@@ -45,6 +45,7 @@
     title: ['title', 'name', 'bezeichnung', 'benennung'],
     description: ['description', 'beschreibung'],
     file: ['file', 'file name', 'filename', 'dateiname', 'document'],
+    material: ['material', 'werkstoff'],
   };
 
   function matchField(headerText) {
@@ -146,7 +147,7 @@
     };
     const cNumber = col('number'), cQty = col('qty'), cLevel = col('level'),
           cPos = col('pos'), cTitle = col('title'), cDesc = col('description'),
-          cFile = col('file'), cStructure = col('structure');
+          cFile = col('file'), cStructure = col('structure'), cMaterial = col('material');
 
     const items = [];
     const rawIndents = [];
@@ -187,7 +188,7 @@
         level: level,
         isAssembly: null, // resolved below
         file: cFile >= 0 ? cellText(row[cFile]) : '',
-        material: '',
+        material: cMaterial >= 0 ? cellText(row[cMaterial]) : '',
         bomStructure: bomStructure,
         isReference: /reference/i.test(bomStructure),
         sourceRow: r + 1,
@@ -226,6 +227,7 @@
     const hasQty = cQty >= 0 && items.some(function (it) { return it.qty !== null; });
     if (!hasQty) warnings.push('No usable quantity column — quantity comparison unavailable for this file.');
     if (!hasLevels) warnings.push('No level/position information found — reference-assembly grouping will be inferred from the Item Master hierarchy.');
+    const hasMaterial = cMaterial >= 0 && items.some(function (it) { return it.material !== ''; });
 
     return {
       kind: 'cad',
@@ -233,6 +235,7 @@
       hasQty: hasQty,
       hasLevels: hasLevels,
       hasStructure: cStructure >= 0,
+      hasMaterial: hasMaterial,
       items: items,
       columns: cols,
       headerRow: headerRow,
