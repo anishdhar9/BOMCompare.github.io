@@ -16,6 +16,9 @@
  *   "Autodesk Vault- <assembly>.pdf"  (or Vault's own default naming,
  *      "Autodesk_Vault__<assembly>.iam.pdf")     -> CAD BOM (Vault PDF)
  *   "EBOM_<assembly>.xlsx"                        -> Item Master BOM
+ *   "INVENTOR_BOM_<assembly>.xlsx"                -> Inventor BOM export (optional second
+ *                                                     CAD source — carries quantities and,
+ *                                                     when the column was included, material)
  *   "PN<number>_LLDBO*.xlsx"                      -> long-lead parts list (optional)
  */
 (function (root, factory) {
@@ -28,6 +31,7 @@
     if (!name) return null;
     if (/^PN\d+_LLDBO/i.test(name) && /\.xlsx?$/i.test(name)) return 'lldbo'; // checked before item-master: distinct prefix, no overlap risk
     if (/autodesk[ _-]*vault/i.test(name) && /\.pdf$/i.test(name)) return 'cad-pdf';
+    if (/^inventor[ _-]*bom/i.test(name) && /\.xlsx?$/i.test(name)) return 'inventor-bom';
     if (/^ebom/i.test(name) && /\.xlsx?$/i.test(name)) return 'item-master';
     return null;
   }
@@ -38,7 +42,7 @@
   // classifyFolderFile. Kept separate from any DOM/picker call so it's
   // testable with a plain mock, no browser needed.
   async function scanFolder(directoryHandle) {
-    const found = { 'cad-pdf': [], 'item-master': [], 'lldbo': [] };
+    const found = { 'cad-pdf': [], 'item-master': [], 'lldbo': [], 'inventor-bom': [] };
     for await (const entry of directoryHandle.values()) {
       if (entry.kind !== 'file') continue;
       const kind = classifyFolderFile(entry.name);

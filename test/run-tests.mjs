@@ -76,6 +76,28 @@ console.log('\n== synthetic: leveled CAD parsing, exact grouping, qty roll-up ==
   check('missingTotal counts unique PNs', res.missingTotal === 4, res.missingTotal);
 }
 
+console.log('\n== synthetic: leveled CAD parsing captures Material column ==');
+{
+  const aoaWithMaterial = [
+    ['Item', 'Part Number', 'BOM Structure', 'QTY', 'Description', 'Material'],
+    ['1', 'PART-A', 'Normal', '1', 'desc', 'AISI 304'],
+    ['1.1', 'PART-B', 'Purchased', '2', 'desc', ''],
+  ];
+  const cadWithMat = cadLeveledParser.parse(aoaWithMaterial, { source: 'leveled-sheet' });
+  check('material column detected', cadWithMat.hasMaterial === true, cadWithMat.hasMaterial);
+  check('material value captured per item', cadWithMat.items[0].material === 'AISI 304', cadWithMat.items[0].material);
+  check('blank material stays empty string, not null', cadWithMat.items[1].material === '', cadWithMat.items[1].material);
+
+  const aoaNoMaterial = [
+    ['Item', 'Part Number', 'QTY'],
+    ['1', 'PART-A', '1'],
+  ];
+  const cadNoMat = cadLeveledParser.parse(aoaNoMaterial, { source: 'leveled-sheet' });
+  check('hasMaterial false when no Material column exists', cadNoMat.hasMaterial === false, cadNoMat.hasMaterial);
+  check('werkstoff (German) recognized as a material header',
+    cadLeveledParser.parse([['Number', 'Werkstoff'], ['PART-A', 'AISI 316']], { source: 'leveled-sheet' }).hasMaterial === true);
+}
+
 console.log('\n== synthetic: IM quantity roll-up through ancestors ==');
 {
   const im = {
@@ -279,6 +301,10 @@ console.log('\n== synthetic: folder auto-load file classification ==');
     ['Autodesk Vault- 723020509.dwg', null],                       // right prefix, wrong extension
     ['readme.txt', null],
     ['', null],
+    ['INVENTOR_BOM_726020768.xlsx', 'inventor-bom'],               // real sample naming
+    ['Inventor BOM - 726020768.xls', 'inventor-bom'],              // case-insensitive, spacing variant
+    ['inventor-bom-726020768.xlsx', 'inventor-bom'],
+    ['INVENTOR_BOM_726020768.docx', null],                         // right prefix, wrong extension
   ];
   for (const [name, expected] of cases) {
     check('classifyFolderFile(' + JSON.stringify(name) + ') = ' + expected,
@@ -298,13 +324,15 @@ console.log('\n== synthetic: folder auto-load file classification ==');
   const mockEntries = [
     { kind: 'file', name: 'Autodesk Vault- 723020509.pdf', getFile: async () => ({ name: 'Autodesk Vault- 723020509.pdf' }) },
     { kind: 'file', name: 'EBOM_723020509.xlsx', getFile: async () => ({ name: 'EBOM_723020509.xlsx' }) },
+    { kind: 'file', name: 'INVENTOR_BOM_723020509.xlsx', getFile: async () => ({ name: 'INVENTOR_BOM_723020509.xlsx' }) },
     { kind: 'file', name: 'notes.txt', getFile: async () => ({ name: 'notes.txt' }) },
     { kind: 'directory', name: 'subfolder' },
   ];
   const found = await folder.scanFolder(mockDir(mockEntries));
   check('scanFolder finds exactly 1 cad-pdf', found['cad-pdf'].length === 1 && found['cad-pdf'][0].name === 'Autodesk Vault- 723020509.pdf', found['cad-pdf']);
   check('scanFolder finds exactly 1 item-master', found['item-master'].length === 1 && found['item-master'][0].name === 'EBOM_723020509.xlsx', found['item-master']);
-  check('scanFolder ignores directories and unmatched files', found['cad-pdf'].length + found['item-master'].length === 2);
+  check('scanFolder finds exactly 1 inventor-bom', found['inventor-bom'].length === 1 && found['inventor-bom'][0].name === 'INVENTOR_BOM_723020509.xlsx', found['inventor-bom']);
+  check('scanFolder ignores directories and unmatched files', found['cad-pdf'].length + found['item-master'].length + found['inventor-bom'].length === 3);
 
   // ambiguous folder (two EBOM files) -> both bucketed, caller decides what to do
   const ambiguousEntries = mockEntries.concat([
@@ -416,7 +444,7 @@ console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-o
   });
 
   const cadSource = {
-    kind: 'cad', source: 'flat-xlsx', hasQty: false, items: [
+    kind: 'cad', source: 'flat-xlsx', hasQty: false, hasMaterial: true, items: [
       { number: 'PART-A', title: 'Part A', material: 'AISI 304', isAssembly: false },
       { number: 'PART-B', title: 'Part B', material: 'AISI 304L', isAssembly: false }, // genuine grade difference
       { number: '7-999-00002', title: 'Purchased', material: 'AISI 316', isAssembly: false },
@@ -442,7 +470,7 @@ console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-o
 
 /* ---------------- real-sample baseline tests ---------------- */
 
-const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath] = process.argv.slice(2);
+const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath, invBomPath, imBomMatPath, pdf726Path] = process.argv.slice(2);
 let pdfjsLib = null;
 try { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); } catch (e) { /* npm install to enable PDF tests */ }
 
@@ -714,6 +742,50 @@ if (lldboPath) {
     check('7 of 8 unique LLDBO part numbers absent from the unrelated Item Master',
       res.totalLldboItems === 8 && res.missingFromIm.length === 7, { total: res.totalLldboItems, missing: res.missingFromIm.length });
   }
+}
+
+if (invBomPath && imBomMatPath) {
+  console.log('\n== real samples: INVENTOR_BOM_726020768.xlsx (material column) vs its Item Master ==');
+  const invWb = XLSX.read(fs.readFileSync(invBomPath), { type: 'buffer' });
+  const invRes = detect.parseCadFromWorkbook(invWb, XLSX);
+  check('Inventor BOM export parsed as leveled sheet', !!(invRes && invRes.ok && invRes.ok.source === 'leveled-sheet'), invRes && invRes.ok && invRes.ok.source);
+  const invCad = invRes.ok;
+  check('726020768 Inventor BOM: 281 items, qty + material', invCad.items.length === 281 && invCad.hasQty === true && invCad.hasMaterial === true,
+    invCad && { n: invCad.items.length, q: invCad.hasQty, m: invCad.hasMaterial });
+  const withMat = invCad.items.filter(i => i.material).length;
+  check('726020768 Inventor BOM: 237 items have a material value', withMat === 237, withMat);
+
+  const imBomMatWb = XLSX.read(fs.readFileSync(imBomMatPath), { type: 'buffer' });
+  const imBomMat = detect.parseItemMasterFromWorkbook(imBomMatWb, XLSX);
+  check('726020768 Item Master: 302 rows, projectKey SPN016704/PN22829',
+    !!imBomMat && imBomMat.rows.length === 302 && imBomMat.projectKey && imBomMat.projectKey.spn === 'SPN016704' && imBomMat.projectKey.pn === 'PN22829',
+    imBomMat && { rows: imBomMat.rows.length, projectKey: imBomMat.projectKey });
+
+  const matRes726 = materialCompare.compareMaterial([invCad], imBomMat);
+  check('material check applicable via the Inventor BOM export (not flat-xlsx)', matRes726.applicable === true, matRes726);
+  check('726020768: 6 genuine material mismatches',
+    matRes726.mismatches.length === 6 && new Set(matRes726.mismatches.map(m => m.number)).size === 6,
+    matRes726.mismatches.map(m => m.number));
+  check('726020768: CAD-side modeling gap caught (Generic.1 placeholder material)',
+    matRes726.mismatches.some(m => m.cadMaterial === 'Generic.1'), matRes726.mismatches.map(m => m.cadMaterial));
+
+  const folderKind = folder.classifyFolderFile('INVENTOR_BOM_726020768.xlsx'); // this org's real naming, not the upload system's temp path
+  check('folder auto-load recognizes this exact real filename', folderKind === 'inventor-bom', folderKind);
+
+  if (pdf726Path && pdfjsLib) {
+    console.log('\n== real samples: 726020768 three-way (Vault PDF + Inventor BOM + Item Master) ==');
+    const { parsed: pdfCad726 } = await parsePdf(pdf726Path);
+    check('Vault PDF has no material column (as expected)', pdfCad726.hasMaterial === false, pdfCad726.hasMaterial);
+
+    const combined = compareAll([pdfCad726, invCad], imBomMat);
+    check('three-way compareAll does not crash and produces a result', !!combined && typeof combined.missingTotal === 'number', combined);
+    check('material check still finds the Inventor BOM source when PDF is listed first',
+      materialCompare.compareMaterial([pdfCad726, invCad], imBomMat).applicable === true);
+  } else if (pdf726Path) {
+    console.log('\n(pdfjs-dist not installed — skipped the 726020768 three-way PDF test)');
+  }
+} else if (invBomPath || imBomMatPath) {
+  console.log('\n(the Inventor BOM material test needs both the Inventor BOM export and its Item Master path)');
 }
 
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nall tests passed');

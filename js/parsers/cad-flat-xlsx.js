@@ -102,6 +102,7 @@
           sheetName: sheetName,
           hasQty: false,
           hasLevels: false,
+          hasMaterial: items.some(function (it) { return it.material !== ''; }),
           items: items,
           warnings: warnings,
         };

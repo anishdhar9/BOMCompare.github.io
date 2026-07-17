@@ -3,10 +3,12 @@
  * material for the same part number, and builds the always-visible
  * "Bought-Out Parts" (7-999-*) reference panel.
  *
- * Only the flat Vault Excel export carries material on the CAD side
- * (verified: neither the Vault multi-level PDF nor the Inventor .xlsx BOM
- * export has a material column) — this check is only applicable when that
- * source is loaded.
+ * Not every CAD source carries material on the CAD side: the Vault
+ * multi-level PDF never has a material column, and it's optional in both
+ * the flat Vault Excel export and the Inventor BOM export (Vault lets users
+ * choose which columns are visible, so this varies by export) — this check
+ * uses whichever loaded CAD source actually has material data
+ * (`hasMaterial`), and is only applicable when at least one does.
  *
  * A raw string comparison is unusable: verified on real data that of 518
  * shared manufactured (non-purchased) part numbers between a flat Vault
@@ -122,12 +124,16 @@
     return longer.indexOf(shorter) !== -1;
   }
 
-  // Picks the CAD source that actually carries material (only the flat
-  // Vault export does), and a lookup of its first-seen material per PN.
+  // Picks the first loaded CAD source that actually carries material data
+  // and a lookup of its first-seen material per PN. Not every CAD source
+  // type does: the Vault multi-level PDF never has a material column, and
+  // some Inventor BOM exports omit it (columns are user-configurable in
+  // Vault) while others include it — so this checks actual content
+  // (`hasMaterial`), not the source's format/kind.
   function cadMaterialByPn(cadSources) {
     for (var i = 0; i < cadSources.length; i++) {
       var src = cadSources[i];
-      if (src.source !== 'flat-xlsx') continue;
+      if (!src.hasMaterial) continue;
       var map = new Map();
       var any = false;
       for (var j = 0; j < src.items.length; j++) {
@@ -149,7 +155,7 @@
     if (!cad) {
       return {
         applicable: false,
-        reason: 'No loaded CAD source carries material data — only the flat Vault Excel export does (not the multi-level PDF or the Inventor BOM export).',
+        reason: 'No loaded CAD source carries material data — the Vault multi-level PDF never does, and it depends on which columns were included in a flat Vault export or Inventor BOM export.',
         boughtOut: imQc.boughtOutParts(im),
       };
     }
