@@ -122,11 +122,37 @@ different failure mode than CAD-vs-BOM drift:
    for catalog hardware; every other part is flagged if *either* is missing.
 6. **Material completeness**: every non-assembly row should have a Material. Assemblies are
    detected from the Row Order hierarchy (any row with children under it) and excluded — they
-   legitimately don't carry one.
+   legitimately don't carry one. Purchased/catalog parts (`X-999-…`) are excluded here too —
+   see below.
 
 The downloadable QC report includes a full copy of the Item Master with the flagged
 Title/Description/Material cells **actually highlighted** (real cell fills, not just a
 separate list) — this needed a different Excel library; see the vendoring note below.
+
+### Material: CAD vs Item Master, and Bought-Out Parts
+
+Purchased/catalog parts (`X-999-…`) are excluded from Check 6 above and from this comparison's
+main findings — verified on real data that 105 of 111 Check-6 flags were purchased parts
+(bearings, wheels, cylinders…) where a blank material is often not a real gap, drowning out
+the genuine manufactured-part gaps underneath. They get their own **Bought-Out Parts**
+panel instead: a full, always-collapsed reference listing of every `X-999-…` part with its
+Item Master material and CAD material side by side, mismatches/missing material marked —
+informational, never counted toward any flagged total.
+
+For manufactured (non-purchased) parts, a genuine **Material: CAD vs Item Master** check
+compares material values — only active once a CAD source that actually carries material is
+loaded (the flat Vault Excel paste; neither the multi-level PDF nor the Inventor BOM export
+has a material column). A raw string comparison is unusable: verified that of 518 shared
+manufactured part numbers in a real sample, 38 "differ" as plain text and every one of them
+is a naming-convention variant of the same material (`1.4301` = `AISI 304`, DIN vs AISI
+grade designation; `AISI 316L` vs `AISI 316 L`, spacing only; `SS316L` vs `AISI316L`,
+abbreviation; `Silikon` vs `Silikon/weiß/60°Shore`, CAD simply carrying more descriptive
+detail; `Silicon`/`Silikon` and `Borosilicate`/`Borosilikat`, English/German spelling) — not
+real errors. The check normalizes before comparing (case/spacing, a DIN↔AISI grade lookup,
+one value being a more detailed qualifier of the other) but deliberately keeps a grade's
+L-suffix significant (`304` vs `304L`, `316` vs `316L` stay flagged as genuinely different),
+since that can be a real weldability/corrosion spec choice, not just formatting. On that same
+sample this reduces the 38 false positives to 7 real, worth-reviewing differences.
 
 ## Long-Lead Parts (LLDBO)
 
@@ -170,6 +196,7 @@ js/parsers/lldbo.js          LLDBO (long-lead parts) list parser
 js/parsers/detect.js         format detection / role validation
 js/imqc.js                Item Master data-quality checks (no DOM)
 js/imqc-export.js         styled "data quality" export sheet (real cell fills)
+js/material-compare.js    material CAD-vs-IM comparison + bought-out parts (no DOM)
 js/lldbo-compare.js       LLDBO vs Item Master comparison (no DOM)
 js/folder.js              folder auto-load classification/scan (no DOM)
 js/app.js                 UI wiring

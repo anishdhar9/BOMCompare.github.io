@@ -21,6 +21,7 @@
     folderHandle: null, // FileSystemDirectoryHandle from "Load from folder", if used
     lldbo: null,         // parsed LLDBO result (+ fileName), optional
     lldboResult: null,   // js/lldbo-compare.js compareLldbo() result
+    materialResult: null, // js/material-compare.js compareMaterial() result
   };
 
   // Base name suffix from the Item Master's SPN/PN project key, e.g.
@@ -43,6 +44,7 @@
     const idx = state.cadSources.findIndex(function (s) { return cadRole(s) === role; });
     if (idx >= 0) state.cadSources.splice(idx, 1, parsed);
     else state.cadSources.push(parsed);
+    runMaterialCheck();
   }
 
   /* ---------------- column visibility ---------------- */
@@ -139,6 +141,7 @@
         state.cadSources.splice(i, 1);
         renderCadSources('', '');
         updateCompareButton();
+        runMaterialCheck();
       });
       row.appendChild(rm);
       box.appendChild(row);
@@ -204,7 +207,7 @@
         }
       } catch (e) {
         if (role === 'cad') renderCadSources('', file.name + ': ' + (e.message || String(e)));
-        else { state.im = null; state.imQc = null; hideImQc(); setImStatus(file.name, [], e.message || String(e)); }
+        else { state.im = null; state.imQc = null; hideImQc(); setImStatus(file.name, [], e.message || String(e)); runMaterialCheck(); }
       }
     }
     updateCompareButton();
@@ -229,6 +232,7 @@
     state.imQc = BC.imQc.runChecks(im);
     renderImQc();
     if (state.lldbo) runLldboCheck();
+    runMaterialCheck();
   }
 
   function handleCadWorkbook(file, wb) {
@@ -602,6 +606,9 @@
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
     XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
+    if (state.materialResult) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(materialSheetRows(state.materialResult)), 'Material vs CAD');
+    }
     XLSX.writeFile(wb, 'ItemMaster-QC-report' + projectKeySuffix() + '.xlsx');
   });
 
@@ -744,6 +751,123 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lldboSheetRows(state.lldboResult)), 'LLDBO check');
     XLSX.writeFile(wb, 'LLDBO-check' + projectKeySuffix() + '.xlsx');
   });
+
+  /* ---------------- material: CAD vs Item Master ---------------- */
+
+  function hideMaterialResults() {
+    $('material-sections').innerHTML = '';
+  }
+
+  function runMaterialCheck() {
+    if (!state.im) { state.materialResult = null; hideMaterialResults(); return; }
+    state.materialResult = BC.materialCompare.compareMaterial(state.cadSources, state.im);
+    renderMaterialPanel();
+  }
+
+  const MATERIAL_MISMATCH_COLS = [['number', 'Part Number'], ['title', 'Title'], ['imMaterial', 'Item Master Material'], ['cadMaterial', 'CAD Material']];
+
+  function boughtOutSection(boughtOut) {
+    const box = document.createElement('div');
+    box.className = 'qc-section';
+    const head = document.createElement('div');
+    head.className = 'qc-section-head';
+    const titleBox = document.createElement('div');
+    titleBox.innerHTML = '<div class="qc-section-title"></div><p class="qc-section-desc"></p>';
+    titleBox.querySelector('.qc-section-title').textContent = 'Bought-Out Parts (7-999-*)';
+    const mismatchCount = boughtOut.filter(function (b) { return b.mismatch; }).length;
+    const missingCount = boughtOut.filter(function (b) { return b.missingMaterial; }).length;
+    titleBox.querySelector('.qc-section-desc').textContent = 'Reference listing of every purchased/catalog part — not counted toward the checks above. ' +
+      (mismatchCount || missingCount ? mismatchCount + ' material mismatch(es), ' + missingCount + ' missing material — marked below.' : 'No material issues noted.');
+    head.appendChild(titleBox);
+    const pill = document.createElement('span');
+    pill.className = 'qc-pill na';
+    pill.textContent = boughtOut.length + ' PARTS';
+    head.appendChild(pill);
+    box.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'qc-section-body'; // always starts collapsed — reference list, not an action item
+    if (!boughtOut.length) {
+      body.innerHTML = '<div class="empty-state">No purchased/catalog (7-999-*) parts found in this Item Master.</div>';
+    } else {
+      const table = document.createElement('table');
+      table.className = 'results-table';
+      const htr = document.createElement('tr');
+      addTh(htr, 'Part Number'); addTh(htr, 'Title'); addTh(htr, 'Item Master Material'); addTh(htr, 'CAD Material');
+      table.appendChild(htr);
+      for (const part of boughtOut) {
+        const tr = document.createElement('tr');
+        addTd(tr, part.number);
+        addTd(tr, part.title);
+        const tdIm = document.createElement('td');
+        tdIm.textContent = part.missingMaterial ? '(missing)' : part.imMaterial;
+        if (part.missingMaterial) tdIm.className = 'mat-missing';
+        tr.appendChild(tdIm);
+        const tdCad = document.createElement('td');
+        tdCad.textContent = part.cadMaterial || '';
+        if (part.mismatch) tdCad.className = 'mat-mismatch';
+        tr.appendChild(tdCad);
+        table.appendChild(tr);
+      }
+      body.appendChild(table);
+    }
+    box.appendChild(body);
+    head.addEventListener('click', function () { body.classList.toggle('open'); });
+    return box;
+  }
+
+  function renderMaterialPanel() {
+    const res = state.materialResult;
+    const sections = $('material-sections');
+    sections.innerHTML = '';
+    if (!res) return;
+
+    if (res.applicable) {
+      sections.appendChild(lldboSectionFor(
+        'Material: CAD vs Item Master',
+        'Compares CAD material (' + (res.cadSourceFileName ? '"' + res.cadSourceFileName + '"' : 'the flat Vault export') +
+          ') against the Item Master, for manufactured (non-purchased) parts. Naming-convention differences (e.g. "1.4301" vs "AISI 304") are normalized and not flagged; a genuine grade difference (e.g. 304 vs 304L) is.',
+        MATERIAL_MISMATCH_COLS, res.mismatches,
+        '✓ CAD and Item Master materials agree for every shared manufactured part.'
+      ));
+    } else {
+      const note = document.createElement('div');
+      note.className = 'qc-section';
+      const head = document.createElement('div');
+      head.className = 'qc-section-head';
+      head.innerHTML = '<div class="qc-section-title">Material: CAD vs Item Master</div><span class="qc-pill na">N/A</span>';
+      note.appendChild(head);
+      const body = document.createElement('div');
+      body.className = 'qc-section-body open';
+      body.innerHTML = '<div class="empty-state">' + res.reason + '</div>';
+      note.appendChild(body);
+      sections.appendChild(note);
+    }
+
+    sections.appendChild(boughtOutSection(res.boughtOut));
+  }
+
+  function materialSheetRows(res) {
+    const rows = [['Material: CAD vs Item Master', '']];
+    if (!res.applicable) {
+      rows.push(['N/A', res.reason]);
+    } else {
+      rows.push(['Mismatches (manufactured parts)', res.mismatches.length]);
+      if (res.mismatches.length) {
+        rows.push([]);
+        rows.push(MATERIAL_MISMATCH_COLS.map(function (c) { return c[1]; }));
+        for (const m of res.mismatches) rows.push(MATERIAL_MISMATCH_COLS.map(function (c) { return m[c[0]]; }));
+      }
+    }
+    rows.push([]);
+    rows.push(['Bought-Out Parts (7-999-*)', res.boughtOut.length + ' parts — reference listing, not counted as findings']);
+    rows.push(['Part Number', 'Title', 'Item Master Material', 'CAD Material', 'Note']);
+    for (const b of res.boughtOut) {
+      rows.push([b.number, b.title, b.missingMaterial ? '(missing)' : b.imMaterial, b.cadMaterial || '',
+        b.mismatch ? 'mismatch' : (b.missingMaterial ? 'missing material' : '')]);
+    }
+    return rows;
+  }
 
   /* ---------------- compare & render ---------------- */
 
@@ -1268,6 +1392,10 @@
     if (state.imQc) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
       XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
+    }
+
+    if (state.materialResult) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(materialSheetRows(state.materialResult)), 'Material vs CAD');
     }
 
     if (state.lldboResult) {
