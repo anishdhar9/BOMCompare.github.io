@@ -19,6 +19,8 @@
     filter: '',
     mappingCtx: null,   // { aoa, indents, source, analysis, fileName }
     folderHandle: null, // FileSystemDirectoryHandle from "Load from folder", if used
+    lldbo: null,         // parsed LLDBO result (+ fileName), optional
+    lldboResult: null,   // js/lldbo-compare.js compareLldbo() result
   };
 
   // Base name suffix from the Item Master's SPN/PN project key, e.g.
@@ -182,6 +184,11 @@
     });
   }
 
+  function firstSheetAoa(wb, XLSX) {
+    if (!wb.SheetNames.length) return null;
+    return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: null });
+  }
+
   async function handleFiles(role, files) {
     hideMapping();
     for (const file of files) {
@@ -210,6 +217,10 @@
       if (asCad && asCad.ok) {
         throw new Error('This looks like a CAD BOM export — drop it on the CAD BOM box on the left.');
       }
+      const aoa = firstSheetAoa(wb, XLSX);
+      if (aoa && BC.detect.looksLikeLldbo(aoa)) {
+        throw new Error('This looks like an LLDBO (long-lead parts) file — drop it on the Long-Lead Parts box below instead.');
+      }
       throw new Error('No "Number" header row found. Expected the Vault/ERP Item Master BOM export.');
     }
     im.fileName = file.name;
@@ -217,6 +228,7 @@
     setImStatus(file.name, chipsFor(im), '');
     state.imQc = BC.imQc.runChecks(im);
     renderImQc();
+    if (state.lldbo) runLldboCheck();
   }
 
   function handleCadWorkbook(file, wb) {
@@ -236,6 +248,9 @@
       if (asIm) {
         throw new Error('This looks like an Item Master export — drop it on the Item Master box on the right.');
       }
+      if (BC.detect.looksLikeLldbo(res.needsMapping.aoa)) {
+        throw new Error('This looks like an LLDBO (long-lead parts) file — drop it on the Long-Lead Parts box below instead.');
+      }
       renderCadSources('', '');
       showMapping({
         aoa: res.needsMapping.aoa,
@@ -247,6 +262,59 @@
       return;
     }
     throw new Error('Could not find BOM data in this file.');
+  }
+
+  /* ---------------- LLDBO (long-lead parts) handling ---------------- */
+
+  function setLldboStatus(fileName, chips, error) {
+    $('status-file-lldbo').textContent = fileName || '';
+    const chipBox = $('status-chips-lldbo');
+    chipBox.innerHTML = '';
+    chipEls(chipBox, chips);
+    $('status-error-lldbo').textContent = error || '';
+    const zone = $('zone-lldbo');
+    zone.classList.toggle('parsed', !error && !!fileName && !!state.lldbo);
+    zone.classList.toggle('error', !!error);
+  }
+
+  function chipsForLldbo(lldbo) {
+    const chips = [{ text: 'LLDBO', kind: 'good' }, { text: lldbo.rows.length + ' rows' }];
+    const withPn = lldbo.rows.filter(function (r) { return r.partNo; }).length;
+    chips.push({ text: withPn + ' with Part No' });
+    if (lldbo.projectKey) chips.push({ text: lldbo.projectKey.spn + ' / ' + lldbo.projectKey.pn });
+    if (lldbo.warnings && lldbo.warnings.length) {
+      chips.push({ text: lldbo.warnings.length + ' note(s)', kind: 'warn', title: lldbo.warnings.join('\n') });
+    }
+    return chips;
+  }
+
+  function handleLldboWorkbook(file, wb) {
+    const lldbo = BC.detect.parseLldboFromWorkbook(wb, XLSX);
+    if (!lldbo) {
+      const asIm = BC.detect.parseItemMasterFromWorkbook(wb, XLSX);
+      if (asIm) throw new Error('This looks like an Item Master export — drop it on the Item Master box above instead.');
+      const asCad = BC.detect.parseCadFromWorkbook(wb, XLSX);
+      if (asCad && asCad.ok) throw new Error('This looks like a CAD BOM export — drop it on the CAD BOM box above instead.');
+      throw new Error('No "PART NO" header row found. Expected the LLDBO (Long Lead Direct Bought Out) list.');
+    }
+    lldbo.fileName = file.name;
+    state.lldbo = lldbo;
+    setLldboStatus(file.name, chipsForLldbo(lldbo), '');
+    if (state.im) runLldboCheck();
+  }
+
+  async function handleLldboFile(file) {
+    try {
+      if (/\.pdf$/i.test(file.name)) throw new Error('LLDBO is an Excel file, not a PDF.');
+      const buf = await readFileAsArrayBuffer(file);
+      const wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: false });
+      handleLldboWorkbook(file, wb);
+    } catch (e) {
+      state.lldbo = null;
+      state.lldboResult = null;
+      hideLldboResults();
+      setLldboStatus(file.name, [], e.message || String(e));
+    }
   }
 
   async function handleCadPdf(file, buf) {
@@ -535,6 +603,146 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
     XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
     XLSX.writeFile(wb, 'ItemMaster-QC-report' + projectKeySuffix() + '.xlsx');
+  });
+
+  /* ---------------- LLDBO (long-lead parts) check ---------------- */
+
+  function hideLldboResults() {
+    $('lldbo-project-warning').classList.add('hidden');
+    $('lldbo-project-warning').textContent = '';
+    $('lldbo-summary').innerHTML = '';
+    $('lldbo-sections').innerHTML = '';
+  }
+
+  function runLldboCheck() {
+    if (!state.lldbo || !state.im) { state.lldboResult = null; hideLldboResults(); return; }
+    state.lldboResult = BC.lldboCompare.compareLldbo(state.lldbo, state.im, BC.indexItemMaster);
+    renderLldboPanel();
+  }
+
+  function lldboCardFor(label, count, cls) {
+    const el = document.createElement('div');
+    el.className = 'card' + (cls ? ' ' + cls : '');
+    el.innerHTML = '<div class="num"></div><div class="lbl"></div>';
+    el.querySelector('.num').textContent = count;
+    el.querySelector('.lbl').textContent = label;
+    return el;
+  }
+
+  function lldboSectionFor(title, desc, cols, fail, emptyText) {
+    const box = document.createElement('div');
+    box.className = 'qc-section';
+    const head = document.createElement('div');
+    head.className = 'qc-section-head';
+    const titleBox = document.createElement('div');
+    titleBox.innerHTML = '<div class="qc-section-title"></div><p class="qc-section-desc"></p>';
+    titleBox.querySelector('.qc-section-title').textContent = title;
+    titleBox.querySelector('.qc-section-desc').textContent = desc;
+    head.appendChild(titleBox);
+    const pill = document.createElement('span');
+    pill.className = 'qc-pill ' + (fail.length ? 'fail' : 'pass');
+    pill.textContent = fail.length ? fail.length + ' FLAGGED' : 'OK';
+    head.appendChild(pill);
+    box.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'qc-section-body';
+    if (!fail.length) {
+      body.innerHTML = '<div class="empty-state">' + emptyText + '</div>';
+    } else {
+      const table = document.createElement('table');
+      table.className = 'results-table';
+      const htr = document.createElement('tr');
+      for (const [, label] of cols) addTh(htr, label);
+      table.appendChild(htr);
+      for (const row of fail) {
+        const tr = document.createElement('tr');
+        for (const [key] of cols) addTd(tr, row[key]);
+        table.appendChild(tr);
+      }
+      body.appendChild(table);
+      body.classList.add('open');
+    }
+    box.appendChild(body);
+    head.addEventListener('click', function () { body.classList.toggle('open'); });
+    return box;
+  }
+
+  const LLDBO_MISSING_COLS = [['number', 'Part Number'], ['description', 'Description'], ['qtyText', 'LLDBO Qty']];
+  const LLDBO_QTY_COLS = [['number', 'Part Number'], ['description', 'Description'], ['lldboQty', 'LLDBO Qty'], ['imQty', 'Item Master Qty']];
+
+  function renderLldboPanel() {
+    const res = state.lldboResult;
+    if (!res) { hideLldboResults(); return; }
+
+    const warnEl = $('lldbo-project-warning');
+    if (res.projectKeyMismatch) {
+      warnEl.textContent = '⚠ This LLDBO document is for ' + res.projectKeyMismatch.lldbo.pn +
+        ' (' + res.projectKeyMismatch.lldbo.spn + ') but the loaded Item Master is for ' +
+        res.projectKeyMismatch.im.pn + ' (' + res.projectKeyMismatch.im.spn + ') — are these the right files for the same project?';
+      warnEl.classList.remove('hidden');
+    } else {
+      warnEl.classList.add('hidden');
+      warnEl.textContent = '';
+    }
+
+    const summary = $('lldbo-summary');
+    summary.innerHTML = '';
+    summary.appendChild(lldboCardFor('long-lead parts (with Part No)', res.totalLldboItems));
+    summary.appendChild(lldboCardFor('missing from Item Master', res.missingFromIm.length, res.missingFromIm.length ? 'red' : 'pass'));
+    summary.appendChild(lldboCardFor('quantity mismatches', res.qtyMismatches.length, res.qtyMismatches.length ? 'amber' : 'pass'));
+    if (res.noPartNumberCount) {
+      summary.appendChild(lldboCardFor('not yet assigned a Part No', res.noPartNumberCount, 'na'));
+    }
+
+    const sections = $('lldbo-sections');
+    sections.innerHTML = '';
+    sections.appendChild(lldboSectionFor(
+      'Missing from Item Master',
+      'Long-lead parts released early to procurement that never made it into the Item Master — the part may quietly never get ordered through the normal channel.',
+      LLDBO_MISSING_COLS, res.missingFromIm,
+      '✓ Every long-lead part with a Part No is present in the Item Master.'
+    ));
+    sections.appendChild(lldboSectionFor(
+      'Quantity mismatches',
+      'The long-lead quantity (summed across all LLDBO rows for that part) should equal the Item Master\'s rolled-up total.',
+      LLDBO_QTY_COLS, res.qtyMismatches,
+      '✓ Quantities agree for every part found in both.'
+    ));
+  }
+
+  // AOA rows for the LLDBO check export sheet.
+  function lldboSheetRows(res) {
+    const rows = [['Long-Lead Parts (LLDBO) check', '']];
+    if (res.projectKeyMismatch) {
+      rows.push(['⚠ Project key mismatch', 'LLDBO: ' + res.projectKeyMismatch.lldbo.pn + ' (' + res.projectKeyMismatch.lldbo.spn +
+        ') vs Item Master: ' + res.projectKeyMismatch.im.pn + ' (' + res.projectKeyMismatch.im.spn + ')']);
+    }
+    rows.push([]);
+    rows.push(['Long-lead parts (with Part No)', res.totalLldboItems]);
+    rows.push(['Not yet assigned a Part No', res.noPartNumberCount]);
+    rows.push(['Missing from Item Master', res.missingFromIm.length]);
+    rows.push(['Quantity mismatches', res.qtyMismatches.length]);
+    if (res.missingFromIm.length) {
+      rows.push([]);
+      rows.push(['Missing from Item Master', '', '']);
+      rows.push(LLDBO_MISSING_COLS.map(function (c) { return c[1]; }));
+      for (const r of res.missingFromIm) rows.push(LLDBO_MISSING_COLS.map(function (c) { return r[c[0]]; }));
+    }
+    if (res.qtyMismatches.length) {
+      rows.push([]);
+      rows.push(['Quantity mismatches', '', '', '']);
+      rows.push(LLDBO_QTY_COLS.map(function (c) { return c[1]; }));
+      for (const r of res.qtyMismatches) rows.push(LLDBO_QTY_COLS.map(function (c) { return r[c[0]]; }));
+    }
+    return rows;
+  }
+
+  $('btn-lldbo-export').addEventListener('click', function () {
+    if (!state.lldboResult) return;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lldboSheetRows(state.lldboResult)), 'LLDBO check');
+    XLSX.writeFile(wb, 'LLDBO-check' + projectKeySuffix() + '.xlsx');
   });
 
   /* ---------------- compare & render ---------------- */
@@ -1062,6 +1270,10 @@
       XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
     }
 
+    if (state.lldboResult) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lldboSheetRows(state.lldboResult)), 'LLDBO check');
+    }
+
     return wb;
   }
 
@@ -1102,6 +1314,31 @@
     });
   }
 
+  // LLDBO is a single-file, optional zone with its own handler (not routed
+  // through the CAD/IM-specific handleFiles dispatcher).
+  function wireLldboZone() {
+    const zone = $('zone-lldbo');
+    const input = $('file-lldbo');
+    const pick = $('pick-lldbo');
+    const open = function () { input.click(); };
+    zone.addEventListener('click', function (ev) { if (!ev.target.closest('button')) open(); });
+    pick.addEventListener('click', function (ev) { ev.stopPropagation(); open(); });
+    zone.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
+    });
+    input.addEventListener('change', function () {
+      if (input.files && input.files[0]) handleLldboFile(input.files[0]);
+      input.value = '';
+    });
+    zone.addEventListener('dragover', function (ev) { ev.preventDefault(); zone.classList.add('dragover'); });
+    zone.addEventListener('dragleave', function () { zone.classList.remove('dragover'); });
+    zone.addEventListener('drop', function (ev) {
+      ev.preventDefault();
+      zone.classList.remove('dragover');
+      if (ev.dataTransfer.files && ev.dataTransfer.files[0]) handleLldboFile(ev.dataTransfer.files[0]);
+    });
+  }
+
   /* ---------------- folder auto-load / auto-save ---------------- */
   // File System Access API: a browser cannot read a typed filesystem path
   // (no such API exists, in any browser, for security reasons). One click
@@ -1117,13 +1354,15 @@
     el.className = 'folder-status' + (kind ? ' ' + kind : '');
   }
 
-  async function loadFolderMatch(role, entries, label) {
+  // loader: async (file) => void — either handleFiles(role, [file]) for CAD/IM
+  // or handleLldboFile(file) for the LLDBO's own single-file path.
+  async function loadFolderMatch(entries, label, loader, optional) {
     if (entries.length === 1) {
       const file = await entries[0].getFile();
-      await handleFiles(role, [file]);
+      await loader(file);
       return file.name;
     }
-    if (entries.length === 0) return 'no ' + label + ' found — drop it manually';
+    if (entries.length === 0) return optional ? 'none found (optional)' : 'no ' + label + ' found — drop it manually';
     return entries.length + ' possible ' + label + ' files found — ambiguous, drop the right one manually';
   }
 
@@ -1163,9 +1402,10 @@
       return;
     }
 
-    const cadMsg = await loadFolderMatch('cad', found['cad-pdf'], 'CAD BOM PDF');
-    const imMsg = await loadFolderMatch('im', found['item-master'], 'Item Master (EBOM_*)');
-    const matchSummary = '"' + handle.name + '" — CAD: ' + cadMsg + ' · Item Master: ' + imMsg;
+    const cadMsg = await loadFolderMatch(found['cad-pdf'], 'CAD BOM PDF', function (f) { return handleFiles('cad', [f]); }, false);
+    const imMsg = await loadFolderMatch(found['item-master'], 'Item Master (EBOM_*)', function (f) { return handleFiles('im', [f]); }, false);
+    const lldboMsg = await loadFolderMatch(found['lldbo'], 'LLDBO file', handleLldboFile, true);
+    const matchSummary = '"' + handle.name + '" — CAD: ' + cadMsg + ' · Item Master: ' + imMsg + ' · LLDBO: ' + lldboMsg;
     folderStatus(matchSummary);
 
     if (state.cadSources.length && state.im) {
@@ -1182,6 +1422,7 @@
 
   wireZone('cad');
   wireZone('im');
+  wireLldboZone();
   renderColumnsMenu();
   setupFolderFeature();
 })();

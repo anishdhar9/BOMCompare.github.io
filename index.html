@@ -65,6 +65,29 @@
       <div id="qc-sections"></div>
     </section>
 
+    <section class="im-qc" id="lldbo-panel">
+      <div class="im-qc-head">
+        <div>
+          <h2>Long-Lead Parts (LLDBO) <span class="optional-tag">optional</span></h2>
+          <p class="dz-hint">Long-lead direct-bought-out parts are released to procurement early, ahead of the normal BOM release, to cover supplier lead times. Drop the "PNxxxx_LLDBO" file and, once the Item Master is also loaded, this checks that each one actually made it into the released BOM.</p>
+        </div>
+        <button type="button" class="btn btn-small" id="btn-lldbo-export">Download LLDBO check</button>
+      </div>
+      <div class="dropzone dropzone-inline" id="zone-lldbo" data-role="lldbo" tabindex="0">
+        <input type="file" id="file-lldbo" accept=".xlsx,.xls" hidden>
+        <div class="dz-inner">
+          <p class="dz-hint">Drop the "PNxxxx_LLDBO" file here</p>
+          <p class="dz-file" id="status-file-lldbo"></p>
+          <div class="dz-chips" id="status-chips-lldbo"></div>
+          <p class="dz-error" id="status-error-lldbo"></p>
+          <button type="button" class="btn btn-small" id="pick-lldbo">Choose file</button>
+        </div>
+      </div>
+      <p class="notice warn hidden" id="lldbo-project-warning"></p>
+      <div class="summary" id="lldbo-summary"></div>
+      <div id="lldbo-sections"></div>
+    </section>
+
     <section class="mapping hidden" id="mapping-panel">
       <h2>Assign columns</h2>
       <p>The CAD BOM's columns couldn't be identified automatically. Tell me which column holds each field (only Part Number is required):</p>
@@ -126,7 +149,8 @@
           <li><strong>In Item Master only:</strong> items whose number never appears in the CAD BOM — stale or manually added entries worth reviewing.</li>
           <li><strong>Item Master data quality</strong> (runs the moment the Item Master loads, no CAD BOM required): six checks on the file itself — Producer/Producer Number reflected in the top-level row's Description; the "END OF LINE" entry has the organization's fixed part number and a whole-number Row Order; the Quantity and Item Qty columns agree on every row (catches a manual edit to one that wasn't mirrored to the other); when the export includes an Entity Icon column, that it reads "Normal" everywhere; every row has a Title and Description (purchased/catalog parts, numbered "X-999-…", are only flagged when both are missing); and every non-assembly row has a Material (assemblies/weldments are excluded — they don't carry one). The QC report export includes a full copy of the Item Master with the flagged Title/Description/Material cells actually highlighted, not just listed.</li>
           <li><strong>Export file name:</strong> when the Item Master's top-level row carries the organization's SPN/PN project key (from its Producer / Producer Number columns, or parsed from the Description text), both the comparison export and the QC report include it in the file name.</li>
-          <li><strong>Load from folder</strong> (Chrome/Edge only — a browser can't read a typed path, so this uses the browser's own folder picker): click, choose the PNxxxx project folder once, and the app finds the "Autodesk Vault…" PDF and "EBOM_…" Item Master export inside it, loads both automatically, runs the comparison, and writes the result workbook straight back into that folder — no download step. If a file is missing or the folder has more than one candidate, that side is left for you to drop in manually; the normal upload boxes always work as a fallback.</li>
+          <li><strong>Load from folder</strong> (Chrome/Edge only — a browser can't read a typed path, so this uses the browser's own folder picker): click, choose the PNxxxx project folder once, and the app finds the "Autodesk Vault…" PDF, the "EBOM_…" Item Master export, and (if present) a "PNxxxx_LLDBO" file inside it, loads them automatically, runs the comparisons, and writes the result workbook straight back into that folder — no download step. If a required file is missing or the folder has more than one candidate, that side is left for you to drop in manually; the normal upload boxes always work as a fallback.</li>
+          <li><strong>Long-Lead Parts (LLDBO)</strong> — optional, checked once both it and the Item Master are loaded: long-lead direct-bought-out parts are released to procurement ahead of the normal BOM release to cover supplier lead times. This flags any long-lead part number that never made it into the Item Master (the early release didn't get captured, so it may quietly never get ordered through the normal channel) and any whose long-lead quantity (summed if the same part appears on more than one line) doesn't match the Item Master's rolled-up total. If the LLDBO document's own SPN/PN project key doesn't match the loaded Item Master's, a warning flags the likely mismatched files before anything else is reported. Rows not yet assigned a part number are counted separately and not treated as findings.</li>
         </ul>
       </details>
     </section>
@@ -143,9 +167,11 @@
   <script src="js/parsers/cad-flat-xlsx.js"></script>
   <script src="js/parsers/cad-leveled.js"></script>
   <script src="js/parsers/pdf-extract.js"></script>
+  <script src="js/parsers/lldbo.js"></script>
   <script src="js/parsers/detect.js"></script>
   <script src="js/imqc.js"></script>
   <script src="js/imqc-export.js"></script>
+  <script src="js/lldbo-compare.js"></script>
   <script src="js/folder.js"></script>
   <script src="js/app.js"></script>
 </body>

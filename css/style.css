@@ -124,6 +124,13 @@ body {
 .im-qc-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 4px; }
 .im-qc-head h2 { margin: 0 0 4px; font-size: 17px; }
 .im-qc-head .dz-hint { margin: 0; max-width: 640px; }
+.optional-tag {
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--muted); background: var(--chip-bg); border-radius: 4px; padding: 2px 6px; vertical-align: middle;
+}
+.dropzone-inline { margin: 12px 0; padding: 12px; }
+.dropzone-inline .dz-inner { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; }
+.dropzone-inline .dz-file, .dropzone-inline .dz-error { margin: 0; }
 .qc-section { border: 1px solid var(--border); border-radius: 9px; margin-top: 10px; overflow: hidden; }
 .qc-section-head {
   padding: 10px 14px; display: flex; align-items: center; justify-content: space-between;
