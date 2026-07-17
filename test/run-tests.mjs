@@ -25,6 +25,7 @@ const { cadLeveledParser } = require(path.join(rootDir, 'js/parsers/cad-leveled.
 const { detect } = require(path.join(rootDir, 'js/parsers/detect.js'));
 const { imQc } = require(path.join(rootDir, 'js/imqc.js'));
 const { imQcExport } = require(path.join(rootDir, 'js/imqc-export.js'));
+const { folder } = require(path.join(rootDir, 'js/folder.js'));
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -254,6 +255,56 @@ console.log('\n== synthetic: Title/Description completeness (c5) + Material comp
   check('no Material column -> hasMaterial false', noMatIm.hasMaterial === false);
   const noMatQc = imQc.runChecks(noMatIm);
   check('c6 not-applicable without Material column (not mass-fail)', noMatQc.c6.applicable === false, noMatQc.c6);
+}
+
+console.log('\n== synthetic: folder auto-load file classification ==');
+{
+  const cases = [
+    // [filename, expected classification]
+    ['Autodesk Vault- 723020509.pdf', 'cad-pdf'],                 // this org's stated naming
+    ['Autodesk_Vault__723020509.iam.pdf', 'cad-pdf'],              // Vault web client's own default naming (real sample seen)
+    ['autodesk vault - 733020013.pdf', 'cad-pdf'],                 // case-insensitive, extra spacing
+    ['EBOM_723020509.xlsx', 'item-master'],
+    ['ebom-723020509.xls', 'item-master'],
+    ['EBOM.xlsx', 'item-master'],
+    ['HSG_Item_Master_BOM.xls', null],                             // old naming convention, not auto-matched
+    ['PN22426_LLDBO.xlsx', null],                                  // LLDBO file, not yet classified (future work)
+    ['Autodesk Vault- 723020509.dwg', null],                       // right prefix, wrong extension
+    ['readme.txt', null],
+    ['', null],
+  ];
+  for (const [name, expected] of cases) {
+    check('classifyFolderFile(' + JSON.stringify(name) + ') = ' + expected,
+      folder.classifyFolderFile(name) === expected, folder.classifyFolderFile(name));
+  }
+
+  // scanFolder against a mock FileSystemDirectoryHandle-shaped object —
+  // proves the traversal/bucketing logic works without a real browser
+  // picker (only window.showDirectoryPicker() itself, in app.js, needs one).
+  function mockDir(entries) {
+    return {
+      values: async function* () {
+        for (const e of entries) yield e;
+      },
+    };
+  }
+  const mockEntries = [
+    { kind: 'file', name: 'Autodesk Vault- 723020509.pdf', getFile: async () => ({ name: 'Autodesk Vault- 723020509.pdf' }) },
+    { kind: 'file', name: 'EBOM_723020509.xlsx', getFile: async () => ({ name: 'EBOM_723020509.xlsx' }) },
+    { kind: 'file', name: 'notes.txt', getFile: async () => ({ name: 'notes.txt' }) },
+    { kind: 'directory', name: 'subfolder' },
+  ];
+  const found = await folder.scanFolder(mockDir(mockEntries));
+  check('scanFolder finds exactly 1 cad-pdf', found['cad-pdf'].length === 1 && found['cad-pdf'][0].name === 'Autodesk Vault- 723020509.pdf', found['cad-pdf']);
+  check('scanFolder finds exactly 1 item-master', found['item-master'].length === 1 && found['item-master'][0].name === 'EBOM_723020509.xlsx', found['item-master']);
+  check('scanFolder ignores directories and unmatched files', found['cad-pdf'].length + found['item-master'].length === 2);
+
+  // ambiguous folder (two EBOM files) -> both bucketed, caller decides what to do
+  const ambiguousEntries = mockEntries.concat([
+    { kind: 'file', name: 'EBOM_old_version.xlsx', getFile: async () => ({}) },
+  ]);
+  const ambiguousFound = await folder.scanFolder(mockDir(ambiguousEntries));
+  check('scanFolder reports ambiguous matches rather than picking one', ambiguousFound['item-master'].length === 2);
 }
 
 /* ---------------- real-sample baseline tests ---------------- */
