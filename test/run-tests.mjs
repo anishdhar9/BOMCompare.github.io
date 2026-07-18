@@ -74,6 +74,40 @@ console.log('\n== synthetic: leveled CAD parsing, exact grouping, qty roll-up ==
     res.qtyMismatches.map(m => m.number));
   check('qty mismatch values', res.qtyMismatches[0].cadQty === 5 && res.qtyMismatches[0].imQty === 2, res.qtyMismatches[0]);
   check('missingTotal counts unique PNs', res.missingTotal === 4, res.missingTotal);
+  check('qty mismatch cadBreakdown carries the CAD row #', res.qtyMismatches[0].cadBreakdown[0].sourceRow === 7,
+    res.qtyMismatches[0].cadBreakdown);
+  check('qty mismatch imBreakdown carries the Item Master row # and Row Order (undefined here -> "" is still a valid, present field)',
+    'sourceRow' in res.qtyMismatches[0].imBreakdown[0] && 'rowOrder' in res.qtyMismatches[0].imBreakdown[0],
+    res.qtyMismatches[0].imBreakdown[0]);
+}
+
+console.log('\n== synthetic: Qty mismatch breakdown carries Item Master Row # ==');
+{
+  const aoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Item Qty'],
+    ['MACH-03', '-', 'Machine 3', 'desc', '-'],
+    ['ASSY-1', '1', 'Sub-assembly', 'desc', '1'],
+    ['PART-X', '1.1', 'Part X', 'desc', '2'], // CAD will say 5
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => aoa },
+  });
+  const partXRow = im.rows.find(r => r.number === 'PART-X');
+  check('PART-X sourceRow is its real row position in the aoa (row 4, 1-based)', partXRow.sourceRow === 4, partXRow.sourceRow);
+
+  const cadAoa = [
+    ['Item', 'Number', 'Title', 'QTY'],
+    ['1', 'MACH-03', 'Machine 3', '1'],
+    ['1.1', 'ASSY-1', 'Sub-assembly', '1'],
+    ['1.1.1', 'PART-X', 'Part X', '5'],
+  ];
+  const cad = cadLeveledParser.parse(cadAoa, { source: 'leveled-sheet' });
+  const res = compare(cad, im);
+  const mismatch = res.qtyMismatches.find(m => m.number === 'PART-X');
+  check('PART-X flagged as a qty mismatch (5 vs 2)', !!mismatch && mismatch.cadQty === 5 && mismatch.imQty === 2, mismatch);
+  check('PART-X imBreakdown carries the real Item Master Row # (4) and Row Order ("1.1")',
+    mismatch.imBreakdown.length === 1 && mismatch.imBreakdown[0].sourceRow === 4 && mismatch.imBreakdown[0].rowOrder === '1.1',
+    mismatch.imBreakdown);
 }
 
 console.log('\n== synthetic: leveled CAD parsing captures Material column ==');

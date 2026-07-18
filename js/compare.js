@@ -102,6 +102,8 @@
         parentTitle: parentRow ? (parentRow.title || '') : '',
         qty: row.qty,
         effQty: eff,
+        sourceRow: row.sourceRow || '',
+        rowOrder: Array.isArray(row.path) ? row.path.join('.') : '',
       });
       if (row.qty === null) { totals.set(pn, null); continue; }
       if (totals.get(pn) !== null || !totals.has(pn)) {
@@ -136,6 +138,7 @@
         parentTitle: parent ? parent.title : '',
         qty: it.qty,
         effQty: eff,
+        sourceRow: it.sourceRow || '',
       });
       if (it.qty === null || eff === null) totals.set(pn, null);
       else if (totals.get(pn) !== null || !totals.has(pn)) totals.set(pn, (totals.get(pn) || 0) + eff);
