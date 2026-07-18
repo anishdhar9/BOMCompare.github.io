@@ -476,7 +476,7 @@
     { key: 'c1', title: 'Producer ↔ Description Match (top-level row only)',
       desc: 'The top-level row’s Producer and Producer Number should appear inside its Description.',
       cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
-        [['producer', 'Producer'], ['producerNumber', 'Producer Number'], ['description', 'Description']]) },
+        [['producer', 'Producer'], ['producerNumber', 'Producer Number'], ['description', 'Description'], ['issue', 'Issue']]) },
     { key: 'c2', title: 'End of Line Integrity',
       desc: 'The "END OF LINE" entry should have Number ' + BC.imQc.END_OF_LINE_NUMBER + ' and a whole-number Row Order.',
       cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat([['issue', 'Issue']]) },

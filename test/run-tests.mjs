@@ -215,6 +215,27 @@ console.log('\n== synthetic: Item Master QC checks ==');
 
   const qc = imQc.runChecks(im);
   check('c1 producer match passes (SPN000111 + 00222 both in description)', qc.c1.applicable === true && qc.c1.fail.length === 0, qc.c1);
+
+  // Reported false-positive-looking case: Producer Number IS present in the
+  // Description (as a substring of a longer token, "PN22759"), but Producer
+  // itself is not -- the fail entry must say exactly which field is missing,
+  // not just "flagged", so this isn't mistaken for the Producer Number being
+  // the (absent) one.
+  const aoaPartialMatch = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Producer', 'Producer Number'],
+    ['MACH-02', '-', 'Machine 2', 'PN22759_SPN017160_WALTER BUSHNELL LIFE SCIENCES PVT LTD, UK, India', 'GLATT', '22759'],
+  ];
+  const imPartial = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => aoaPartialMatch },
+  });
+  const qcPartial = imQc.runChecks(imPartial);
+  check('c1: Producer Number found in Description (substring of "PN22759") but Producer "GLATT" is not -> flagged',
+    qcPartial.c1.fail.length === 1, qcPartial.c1.fail);
+  check('c1: fail entry\'s issue names Producer specifically, not Producer Number',
+    qcPartial.c1.fail.length === 1 &&
+    qcPartial.c1.fail[0].issue.indexOf('Producer "GLATT" not found') !== -1 &&
+    qcPartial.c1.fail[0].issue.indexOf('Producer Number') === -1,
+    qcPartial.c1.fail[0] && qcPartial.c1.fail[0].issue);
   check('c2 flags the second "END OF LINE"-text row with wrong number', qc.c2.found === 2 && qc.c2.fail.length === 1 && qc.c2.fail[0].number === '7-909-00002', qc.c2);
   check('c3 flags PART-B only', qc.c3.applicable === true && qc.c3.fail.length === 1 && qc.c3.fail[0].number === 'PART-B', qc.c3.fail);
   check('c4 flags PART-C only', qc.c4.applicable === true && qc.c4.fail.length === 1 && qc.c4.fail[0].number === 'PART-C', qc.c4.fail);

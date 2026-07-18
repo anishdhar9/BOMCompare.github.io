@@ -76,16 +76,17 @@
       if (!producer && !prodNum) continue;
       applicable++;
       const desc = (row.description || '').toUpperCase();
-      let ok = true;
-      if (producer) ok = ok && desc.indexOf(producer.toUpperCase()) !== -1;
-      if (prodNum) ok = ok && desc.indexOf(prodNum.toUpperCase()) !== -1;
-      if (!ok) {
+      const issues = [];
+      if (producer && desc.indexOf(producer.toUpperCase()) === -1) issues.push('Producer "' + producer + '" not found in Description');
+      if (prodNum && desc.indexOf(prodNum.toUpperCase()) === -1) issues.push('Producer Number "' + prodNum + '" not found in Description');
+      if (issues.length) {
         fail.push(withLocation({
           number: row.number,
           rowOrder: rowOrderText(row) || '-',
           producer: producer || '—',
           producerNumber: prodNum || '—',
           description: row.description || '(blank)',
+          issue: issues.join('; '),
         }, null, row));
       }
     }
