@@ -146,7 +146,7 @@ body {
 .qc-pill.pass { background: var(--green-bg); color: var(--green-text); }
 .qc-pill.fail { background: var(--red-bg); color: var(--red-text); }
 .qc-pill.na { background: var(--chip-bg); color: var(--muted); }
-.qc-section-body { border-top: 1px solid var(--border); padding: 12px 14px; display: none; }
+.qc-section-body { border-top: 1px solid var(--border); padding: 12px 14px; display: none; overflow-x: auto; }
 .qc-section-body.open { display: block; }
 .qc-section .empty-state { padding: 10px; text-align: left; }
 

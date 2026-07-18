@@ -466,25 +466,34 @@
     return col[2] ? col[2](value, row) : value;
   }
 
+  // Every check's columns include Row # (the row's position in the uploaded
+  // file) and Parent Number/Parent Title (the immediate parent assembly, from
+  // Row Order) so a flagged row can be found and placed in context directly
+  // from the table/export, without cross-referencing the source file by hand.
+  const LOCATION_COLS = [['sourceRow', 'Row #'], ['parentNumber', 'Parent Number'], ['parentTitle', 'Parent Title']];
+
   const QC_CHECKS = [
     { key: 'c1', title: 'Producer ↔ Description Match (top-level row only)',
       desc: 'The top-level row’s Producer and Producer Number should appear inside its Description.',
-      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['producer', 'Producer'], ['producerNumber', 'Producer Number'], ['description', 'Description']] },
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
+        [['producer', 'Producer'], ['producerNumber', 'Producer Number'], ['description', 'Description']]) },
     { key: 'c2', title: 'End of Line Integrity',
       desc: 'The "END OF LINE" entry should have Number ' + BC.imQc.END_OF_LINE_NUMBER + ' and a whole-number Row Order.',
-      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['issue', 'Issue']] },
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat([['issue', 'Issue']]) },
     { key: 'c3', title: 'Quantity vs Item Qty',
       desc: 'The numeric value inside Quantity should equal Item Qty on every row — a mismatch usually means one was edited manually without updating the other.',
-      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['title', 'Title'], ['quantity', 'Quantity'], ['itemQty', 'Item Qty']] },
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
+        [['title', 'Title'], ['quantity', 'Quantity'], ['itemQty', 'Item Qty']]) },
     { key: 'c4', title: 'Entity Icon Status',
       desc: 'Every row’s Entity Icon should read "Normal".',
-      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['icon', 'Entity Icon']] },
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat([['icon', 'Entity Icon']]) },
     { key: 'c5', title: 'Title / Description Completeness',
       desc: 'Every row should have a Title and Description. Purchased/catalog parts (X-999-…) are only flagged when both are blank; other parts are flagged if either is missing.',
-      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['title', 'Title'], ['description', 'Description'], ['kind', 'Issue', qcKindLabel]] },
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
+        [['title', 'Title'], ['description', 'Description'], ['kind', 'Issue', qcKindLabel]]) },
     { key: 'c6', title: 'Material Completeness',
       desc: 'Every non-assembly row should have a Material. Assemblies/weldments are excluded (they legitimately carry no material of their own).',
-      cols: [['number', 'Number'], ['rowOrder', 'Row Order'], ['title', 'Title']] },
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat([['title', 'Title']]) },
   ];
 
   function hideImQc() {
@@ -676,8 +685,9 @@
     return box;
   }
 
-  const LLDBO_MISSING_COLS = [['number', 'Part Number'], ['description', 'Description'], ['qtyText', 'LLDBO Qty']];
-  const LLDBO_QTY_COLS = [['number', 'Part Number'], ['description', 'Description'], ['lldboQty', 'LLDBO Qty'], ['imQty', 'Item Master Qty']];
+  const LLDBO_MISSING_COLS = [['number', 'Part Number'], ['description', 'Description'], ['qtyText', 'LLDBO Qty'], ['sourceRow', 'LLDBO Row #']];
+  const LLDBO_QTY_COLS = [['number', 'Part Number'], ['description', 'Description'], ['lldboQty', 'LLDBO Qty'], ['imQty', 'Item Master Qty'],
+    ['sourceRow', 'LLDBO Row #'], ['foundUnder', 'Found Under (Item Master)']];
 
   function renderLldboPanel() {
     const res = state.lldboResult;
@@ -765,7 +775,8 @@
     renderMaterialPanel();
   }
 
-  const MATERIAL_MISMATCH_COLS = [['number', 'Part Number'], ['title', 'Title'], ['imMaterial', 'Item Master Material'], ['cadMaterial', 'CAD Material']];
+  const MATERIAL_MISMATCH_COLS = [['number', 'Part Number'], ['title', 'Title']].concat(LOCATION_COLS).concat(
+    [['imMaterial', 'Item Master Material'], ['cadMaterial', 'CAD Material']]);
 
   function boughtOutSection(boughtOut) {
     const box = document.createElement('div');
@@ -794,12 +805,16 @@
       const table = document.createElement('table');
       table.className = 'results-table';
       const htr = document.createElement('tr');
-      addTh(htr, 'Part Number'); addTh(htr, 'Title'); addTh(htr, 'Item Master Material'); addTh(htr, 'CAD Material');
+      addTh(htr, 'Part Number'); addTh(htr, 'Title'); addTh(htr, 'Row #'); addTh(htr, 'Parent Number'); addTh(htr, 'Parent Title');
+      addTh(htr, 'Item Master Material'); addTh(htr, 'CAD Material');
       table.appendChild(htr);
       for (const part of boughtOut) {
         const tr = document.createElement('tr');
         addTd(tr, part.number);
         addTd(tr, part.title);
+        addTd(tr, part.sourceRow);
+        addTd(tr, part.parentNumber);
+        addTd(tr, part.parentTitle);
         const tdIm = document.createElement('td');
         tdIm.textContent = part.missingMaterial ? '(missing)' : part.imMaterial;
         if (part.missingMaterial) tdIm.className = 'mat-missing';
@@ -862,9 +877,10 @@
     }
     rows.push([]);
     rows.push(['Bought-Out Parts (7-999-*)', res.boughtOut.length + ' parts — reference listing, not counted as findings']);
-    rows.push(['Part Number', 'Title', 'Item Master Material', 'CAD Material', 'Note']);
+    rows.push(['Part Number', 'Title', 'Row #', 'Parent Number', 'Parent Title', 'Item Master Material', 'CAD Material', 'Note']);
     for (const b of res.boughtOut) {
-      rows.push([b.number, b.title, b.missingMaterial ? '(missing)' : b.imMaterial, b.cadMaterial || '',
+      rows.push([b.number, b.title, b.sourceRow || '', b.parentNumber || '', b.parentTitle || '',
+        b.missingMaterial ? '(missing)' : b.imMaterial, b.cadMaterial || '',
         b.mismatch ? 'mismatch' : (b.missingMaterial ? 'missing material' : '')]);
     }
     return rows;
@@ -1254,7 +1270,10 @@
     if (cols.title) addTh(htr, 'Title');
     if (cols.description) addTh(htr, 'Description');
     if (cols.qty) addTh(htr, 'Qty');
-    if (cols.row) addTh(htr, 'Row type');
+    addTh(htr, 'Row type');
+    if (cols.row) addTh(htr, 'Row #');
+    addTh(htr, 'Parent Number');
+    addTh(htr, 'Parent Title');
     table.appendChild(htr);
     for (const r of rows) {
       const tr = document.createElement('tr');
@@ -1265,7 +1284,10 @@
       if (cols.title) addTd(tr, r.title);
       if (cols.description) addTd(tr, r.description);
       if (cols.qty) addTd(tr, fmtQty(r.qty));
-      if (cols.row) addTd(tr, r.rowType || '');
+      addTd(tr, r.rowType || '');
+      if (cols.row) addTd(tr, r.sourceRow || '');
+      addTd(tr, r.parentNumber || '');
+      addTd(tr, r.parentTitle || '');
       table.appendChild(tr);
     }
     pane.appendChild(table);
@@ -1344,50 +1366,60 @@
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), 'Summary');
 
-    const missing = [['Action needed', 'Grouped under', 'Level', 'Part Number', 'Title', 'Description', 'Type', 'File', 'Material', 'CAD source row']];
-    const walk = function (node, depth, rootNumber) {
+    const missing = [['Action needed', 'Parent Number', 'Parent Title', 'Level', 'Part Number', 'Title', 'Description', 'Type', 'File', 'Material', 'CAD Row #']];
+    const walk = function (node, depth, rootNumber, rootTitle) {
       const it = node.item;
       missing.push([
         depth === 0 ? 'YES' : 'grouped (reference subtree)',
         depth === 0 ? '' : rootNumber,
+        depth === 0 ? '' : rootTitle,
         depth + 1,
         it.number, it.title, it.description,
         it.isAssembly === null ? '' : (it.isAssembly ? 'Assembly' : 'Part'),
         it.file, it.material || '', it.sourceRow || '',
       ]);
-      for (const c of node.children) walk(c, depth + 1, rootNumber);
+      for (const c of node.children) walk(c, depth + 1, rootNumber, rootTitle);
     };
-    for (const n of res.missingRoots) walk(n, 0, n.item.number);
+    for (const n of res.missingRoots) walk(n, 0, n.item.number, n.item.title);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(missing), 'Missing from Item Master');
 
     if (res.referenceRoots !== null) {
-      const ref = [['Reference component', 'Grouped under', 'In Item Master?', 'Part Number', 'Title', 'Description', 'Type', 'File']];
-      const walkRef = function (node, depth, rootNumber) {
+      const ref = [['Reference component', 'Parent Number', 'Parent Title', 'In Item Master?', 'Part Number', 'Title', 'Description', 'Type', 'File', 'CAD Row #']];
+      const walkRef = function (node, depth, rootNumber, rootTitle) {
         const it = node.item;
         ref.push([
           depth === 0 ? 'YES' : 'child of reference subtree',
           depth === 0 ? '' : rootNumber,
+          depth === 0 ? '' : rootTitle,
           node.inItemMaster ? 'yes' : 'NO',
           it.number, it.title, it.description,
           it.isAssembly === null ? '' : (it.isAssembly ? 'Assembly' : 'Part'),
-          it.file,
+          it.file, it.sourceRow || '',
         ]);
-        for (const c of node.children) walkRef(c, depth + 1, rootNumber);
+        for (const c of node.children) walkRef(c, depth + 1, rootNumber, rootTitle);
       };
-      for (const n of res.referenceRoots) walkRef(n, 0, n.item.number);
+      for (const n of res.referenceRoots) walkRef(n, 0, n.item.number, n.item.title);
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ref), 'Reference items');
     }
 
-    const qty = [['Part Number', 'Title', 'Qty in CAD', 'Qty in Item Master', 'Difference']];
+    const breakdownText = function (list) {
+      return (list || [])
+        .map(function (b) { return b.parentNumber ? (b.parentNumber + (b.parentTitle ? ' (' + b.parentTitle + ')' : '') + ': ' + fmtQty(b.qty)) : ('(top-level): ' + fmtQty(b.qty)); })
+        .join(' + ');
+    };
+    const qty = [['Part Number', 'Title', 'Qty in CAD', 'Qty in Item Master', 'Difference', 'Found Under (CAD)', 'Found Under (Item Master)']];
     if (res.qtyMismatches) {
-      for (const m of res.qtyMismatches) qty.push([m.number, m.title, m.cadQty, m.imQty, m.cadQty - m.imQty]);
+      for (const m of res.qtyMismatches) {
+        qty.push([m.number, m.title, m.cadQty, m.imQty, m.cadQty - m.imQty,
+          breakdownText(m.cadBreakdown), breakdownText(m.imBreakdown)]);
+      }
     } else {
       qty.push(['n/a — the CAD BOM source has no quantity column']);
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qty), 'Qty mismatches');
 
-    const imonly = [['Part Number', 'Title', 'Description', 'Qty', 'Row type']];
-    for (const r of res.imOnly) imonly.push([r.number, r.title, r.description, r.qty, r.rowType || '']);
+    const imonly = [['Part Number', 'Title', 'Description', 'Qty', 'Row type', 'Row #', 'Parent Number', 'Parent Title']];
+    for (const r of res.imOnly) imonly.push([r.number, r.title, r.description, r.qty, r.rowType || '', r.sourceRow || '', r.parentNumber || '', r.parentTitle || '']);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(imonly), 'In Item Master only');
 
     if (state.imQc) {

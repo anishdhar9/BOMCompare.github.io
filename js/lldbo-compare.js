@@ -46,11 +46,13 @@
     const qtyMismatches = [];
     for (const [pn, entry] of byPn) {
       const descriptions = entry.rows.map(function (r) { return r.description; }).filter(Boolean);
+      const sourceRows = entry.rows.map(function (r) { return r.sourceRow; }).filter(Boolean).join(', ');
       if (!imIndex.byNumber.has(pn)) {
         missingFromIm.push({
           number: entry.number,
           description: descriptions.join(' / '),
           qtyText: entry.rows.map(function (r) { return r.qtyText; }).filter(Boolean).join(' + '),
+          sourceRow: sourceRows,
           rows: entry.rows,
         });
         continue;
@@ -59,11 +61,17 @@
       const imTotal = imIndex.totals.has(pn) ? imIndex.totals.get(pn) : null;
       if (imTotal === null) continue; // not computable on the Item Master side
       if (Math.abs(imTotal - entry.totalQty) > 1e-9) {
+        const breakdown = imIndex.breakdowns.get(pn) || [];
+        const foundUnder = breakdown
+          .map(function (b) { return b.parentNumber ? (b.parentNumber + (b.parentTitle ? ' (' + b.parentTitle + ')' : '')) : ''; })
+          .filter(Boolean).join(' + ');
         qtyMismatches.push({
           number: entry.number,
           description: descriptions.join(' / '),
           lldboQty: entry.totalQty,
           imQty: imTotal,
+          sourceRow: sourceRows,
+          foundUnder: foundUnder,
           rows: entry.rows,
         });
       }

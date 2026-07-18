@@ -18,6 +18,11 @@ computer — there is no server and no upload.
 4. Review the result tabs, hide/show columns as needed, filter, and download the
    result workbook via **Download .xlsx**.
 
+Every result table — on screen and in every exported sheet — carries a **Row #** (the row's
+position in the source file) and, wherever the row sits inside a BOM hierarchy, a **Parent
+Number**/**Parent Title** (its immediate parent assembly), so a flagged row can be found and
+placed in context without cross-referencing the source file by hand.
+
 The moment the Item Master loads, an **Item Master data quality** panel also appears —
 independent of the CAD side — with its own review list and downloadable report. An optional
 **Long-Lead Parts (LLDBO)** panel sits below it for checking early-released long-lead items.
