@@ -133,9 +133,8 @@ different failure mode than CAD-vs-BOM drift:
    legitimately don't carry one. Purchased/catalog parts (`X-999-…`) are excluded here too —
    see below.
 
-The downloadable QC report includes a full copy of the Item Master with the flagged
-Title/Description/Material cells **actually highlighted** (real cell fills, not just a
-separate list) — this needed a different Excel library; see the vendoring note below.
+The downloadable QC report lists every flagged row per check (with its Row # and parent
+assembly), grouped by check.
 
 ### Material: CAD vs Item Master, and Bought-Out Parts
 
@@ -191,9 +190,8 @@ a CAD BOM.
 ## Development
 
 No build step; plain HTML/CSS/JS. Libraries are vendored in `vendor/`
-(`xlsx.full.min.js` is [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style) — a
-drop-in, style-writing-capable fork of SheetJS 0.18.5, needed so the exported workbooks can
-carry real cell highlighting; pdf.js for PDFs) so the app works on locked-down networks.
+(`xlsx.full.min.js` is [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style), a
+drop-in fork of SheetJS 0.18.5; pdf.js for PDFs) so the app works on locked-down networks.
 npm packages are used by the Node tests only.
 
 ```
@@ -205,7 +203,6 @@ js/parsers/pdf-extract.js    pdf.js Vault-report table reconstruction
 js/parsers/lldbo.js          LLDBO (long-lead parts) list parser
 js/parsers/detect.js         format detection / role validation
 js/imqc.js                Item Master data-quality checks (no DOM)
-js/imqc-export.js         styled "data quality" export sheet (real cell fills)
 js/material-compare.js    material CAD-vs-IM comparison + bought-out parts (no DOM)
 js/lldbo-compare.js       LLDBO vs Item Master comparison (no DOM)
 js/folder.js              folder auto-load classification/scan (no DOM)
@@ -213,13 +210,12 @@ js/app.js                 UI wiring
 ```
 
 `vendor/xlsx.full.min.js` is [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style)
-rather than plain SheetJS — verified empirically that community-edition SheetJS silently
-drops cell fill styles on write, which would make the QC report's highlighting silently
-disappear. xlsx-js-style is a drop-in fork of the exact same SheetJS 0.18.5 (same global
-`XLSX`, same API) that adds style-writing support; confirmed it still reads the legacy
-`.xls` Item Master format correctly. `vendor/cpexcel.js` is its codepage-table dependency —
-only used in Node (the Node test suite `require`s the same vendored file the browser loads);
-browsers never fetch it.
+rather than plain SheetJS — originally needed for a styled export sheet with real cell fills
+(since removed as redundant with the "Item Master QC" sheet's per-check tables), kept because
+it's a smaller, fully drop-in replacement (same global `XLSX`, same API, confirmed it still
+reads the legacy `.xls` Item Master format correctly) with no reason to revert.
+`vendor/cpexcel.js` is its codepage-table dependency — only used in Node (the Node test suite
+`require`s the same vendored file the browser loads); browsers never fetch it.
 
 ### Tests
 

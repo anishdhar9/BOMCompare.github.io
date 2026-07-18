@@ -605,17 +605,10 @@
     return rows;
   }
 
-  // Delegates to js/imqc-export.js (shared with the Node test suite, which
-  // asserts the fills actually round-trip through a real .xlsx).
-  function buildStyledImSheet(im, qc) {
-    return BC.imQcExport.buildStyledImSheet(XLSX, im, qc);
-  }
-
   $('btn-qc-export').addEventListener('click', function () {
     if (!state.imQc) return;
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
-    XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
     if (state.materialResult) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(materialSheetRows(state.materialResult)), 'Material vs CAD');
     }
@@ -1235,10 +1228,11 @@
     box.appendChild(cap);
     const t = document.createElement('table');
     const h = document.createElement('tr');
-    ['Parent assembly', 'Parent title', 'Qty per parent', 'Effective qty'].forEach(function (x) { addTh(h, x); });
+    ['Row #', 'Parent assembly', 'Parent title', 'Qty per parent', 'Effective qty'].forEach(function (x) { addTh(h, x); });
     t.appendChild(h);
     for (const e of entries) {
       const tr = document.createElement('tr');
+      addTd(tr, e.sourceRow || '');
       addTd(tr, e.parentNumber || '(top level)');
       addTd(tr, e.parentTitle || '');
       addTd(tr, fmtQty(e.qty));
@@ -1404,14 +1398,22 @@
 
     const breakdownText = function (list) {
       return (list || [])
-        .map(function (b) { return b.parentNumber ? (b.parentNumber + (b.parentTitle ? ' (' + b.parentTitle + ')' : '') + ': ' + fmtQty(b.qty)) : ('(top-level): ' + fmtQty(b.qty)); })
+        .map(function (b) {
+          const where = b.parentNumber ? (b.parentNumber + (b.parentTitle ? ' (' + b.parentTitle + ')' : '')) : '(top-level)';
+          const row = b.sourceRow ? ' [row ' + b.sourceRow + ']' : '';
+          return where + row + ': ' + fmtQty(b.qty);
+        })
         .join(' + ');
     };
-    const qty = [['Part Number', 'Title', 'Qty in CAD', 'Qty in Item Master', 'Difference', 'Found Under (CAD)', 'Found Under (Item Master)']];
+    const rowNumsText = function (list) {
+      return (list || []).map(function (b) { return b.sourceRow; }).filter(Boolean).join(', ');
+    };
+    const qty = [['Part Number', 'Title', 'Qty in CAD', 'Qty in Item Master', 'Difference',
+      'Item Master Row #(s)', 'Found Under (CAD)', 'Found Under (Item Master)']];
     if (res.qtyMismatches) {
       for (const m of res.qtyMismatches) {
         qty.push([m.number, m.title, m.cadQty, m.imQty, m.cadQty - m.imQty,
-          breakdownText(m.cadBreakdown), breakdownText(m.imBreakdown)]);
+          rowNumsText(m.imBreakdown), breakdownText(m.cadBreakdown), breakdownText(m.imBreakdown)]);
       }
     } else {
       qty.push(['n/a — the CAD BOM source has no quantity column']);
@@ -1424,7 +1426,6 @@
 
     if (state.imQc) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
-      XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
     }
 
     if (state.materialResult) {
