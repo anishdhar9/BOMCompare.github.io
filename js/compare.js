@@ -376,7 +376,13 @@
       const pn = normNumber(row.number);
       if (!pn || cadPNs.has(pn) || seenImOnly.has(pn)) continue;
       seenImOnly.add(pn);
-      imOnly.push(row);
+      const parentRow = Array.isArray(row.path) && row.path.length
+        ? imIndex.byPath.get(row.path.slice(0, -1).join('.'))
+        : null;
+      imOnly.push(Object.assign({}, row, {
+        parentNumber: parentRow ? parentRow.number : '',
+        parentTitle: parentRow ? (parentRow.title || '') : '',
+      }));
     }
 
     // 4) reference components: in the full CAD structure but not in the

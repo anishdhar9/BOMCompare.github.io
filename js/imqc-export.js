@@ -34,15 +34,34 @@
   // rather than a separate flagged-only list.
   function buildStyledImSheet(XLSX, im, qc) {
     const cols = [
-      ['number', 'Number'], ['rowOrder', 'Row Order'], ['title', 'Title'],
-      ['description', 'Description'], ['material', 'Material'],
+      ['number', 'Number'], ['sourceRow', 'Row #'], ['rowOrder', 'Row Order'],
+      ['parentNumber', 'Parent Number'], ['parentTitle', 'Parent Title'],
+      ['title', 'Title'], ['description', 'Description'], ['material', 'Material'],
       ['producer', 'Producer'], ['producerNumber', 'Producer Number'],
       ['itemQty', 'Item Qty'], ['quantityText', 'Quantity'],
     ];
     const rowOrderOf = function (row) { return Array.isArray(row.path) ? (row.path.join('.') || '-') : ''; };
+    const pathIndex = new Map();
+    for (const row of im.rows) {
+      if (Array.isArray(row.path) && !pathIndex.has(row.path.join('.'))) pathIndex.set(row.path.join('.'), row);
+    }
+    const parentOf = function (row) {
+      if (!Array.isArray(row.path) || row.path.length === 0) return null;
+      const parent = pathIndex.get(row.path.slice(0, -1).join('.'));
+      return parent ? { number: parent.number, title: parent.title || '' } : null;
+    };
+    const cellValue = function (c, row) {
+      if (c[0] === 'rowOrder') return rowOrderOf(row);
+      if (c[0] === 'parentNumber' || c[0] === 'parentTitle') {
+        const p = parentOf(row);
+        if (!p) return '';
+        return c[0] === 'parentNumber' ? p.number : p.title;
+      }
+      return row[c[0]];
+    };
     const aoa = [cols.map(function (c) { return c[1]; })];
     for (const row of im.rows) {
-      aoa.push(cols.map(function (c) { return c[0] === 'rowOrder' ? rowOrderOf(row) : row[c[0]]; }));
+      aoa.push(cols.map(function (c) { return cellValue(c, row); }));
     }
     const ws = XLSX.utils.aoa_to_sheet(aoa);
 

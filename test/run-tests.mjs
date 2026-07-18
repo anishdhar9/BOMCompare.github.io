@@ -215,6 +215,27 @@ console.log('\n== synthetic: Item Master QC checks ==');
 
   const qc = imQc.runChecks(im);
   check('c1 producer match passes (SPN000111 + 00222 both in description)', qc.c1.applicable === true && qc.c1.fail.length === 0, qc.c1);
+
+  // Reported false-positive-looking case: Producer Number IS present in the
+  // Description (as a substring of a longer token, "PN22759"), but Producer
+  // itself is not -- the fail entry must say exactly which field is missing,
+  // not just "flagged", so this isn't mistaken for the Producer Number being
+  // the (absent) one.
+  const aoaPartialMatch = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Producer', 'Producer Number'],
+    ['MACH-02', '-', 'Machine 2', 'PN22759_SPN017160_WALTER BUSHNELL LIFE SCIENCES PVT LTD, UK, India', 'GLATT', '22759'],
+  ];
+  const imPartial = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => aoaPartialMatch },
+  });
+  const qcPartial = imQc.runChecks(imPartial);
+  check('c1: Producer Number found in Description (substring of "PN22759") but Producer "GLATT" is not -> flagged',
+    qcPartial.c1.fail.length === 1, qcPartial.c1.fail);
+  check('c1: fail entry\'s issue names Producer specifically, not Producer Number',
+    qcPartial.c1.fail.length === 1 &&
+    qcPartial.c1.fail[0].issue.indexOf('Producer "GLATT" not found') !== -1 &&
+    qcPartial.c1.fail[0].issue.indexOf('Producer Number') === -1,
+    qcPartial.c1.fail[0] && qcPartial.c1.fail[0].issue);
   check('c2 flags the second "END OF LINE"-text row with wrong number', qc.c2.found === 2 && qc.c2.fail.length === 1 && qc.c2.fail[0].number === '7-909-00002', qc.c2);
   check('c3 flags PART-B only', qc.c3.applicable === true && qc.c3.fail.length === 1 && qc.c3.fail[0].number === 'PART-B', qc.c3.fail);
   check('c4 flags PART-C only', qc.c4.applicable === true && qc.c4.fail.length === 1 && qc.c4.fail[0].number === 'PART-C', qc.c4.fail);
@@ -382,9 +403,13 @@ console.log('\n== synthetic: LLDBO parsing + comparison against Item Master ==')
   check('LLDBO vs matching-project IM: no project key mismatch', res.projectKeyMismatch === null, res.projectKeyMismatch);
   check('LLDBO: 3 unique part numbers, 1 without a PN yet', res.totalLldboItems === 3 && res.noPartNumberCount === 1, res);
   check('LLDBO: PART-B correctly flagged missing from IM', res.missingFromIm.length === 1 && res.missingFromIm[0].number === 'PART-B', res.missingFromIm);
+  check('LLDBO: PART-B missing-from-IM entry carries an LLDBO Row #', !!res.missingFromIm[0].sourceRow, res.missingFromIm[0]);
   check('LLDBO: PART-C flagged with summed qty 2 vs IM qty 1', res.qtyMismatches.length === 1 &&
     res.qtyMismatches[0].number === 'PART-C' && res.qtyMismatches[0].lldboQty === 2 && res.qtyMismatches[0].imQty === 1,
     res.qtyMismatches);
+  check('LLDBO: PART-C qty-mismatch entry carries an LLDBO Row # and a Found Under (Item Master) string',
+    !!res.qtyMismatches[0].sourceRow && typeof res.qtyMismatches[0].foundUnder === 'string',
+    res.qtyMismatches[0]);
   check('LLDBO: PART-A (present, qty matches) not flagged anywhere',
     !res.missingFromIm.some(m => m.number === 'PART-A') && !res.qtyMismatches.some(m => m.number === 'PART-A'));
 
@@ -508,6 +533,11 @@ if (cadPath && imPath) {
   check('HSG c6 material: 6 non-assembly, non-purchased parts flagged (purchased parts excluded)',
     hsgQc.c6.applicable === true && hsgQc.c6.fail.length === 6 && hsgQc.c6.fail.every(f => !/^\d-999-/.test(f.number)),
     hsgQc.c6.fail.length);
+  check('HSG c6 fail rows carry a real Row # and a non-empty parent (all are nested under some assembly)',
+    hsgQc.c6.fail.every(f => f.sourceRow > 1 && f.parentNumber && f.parentTitle),
+    hsgQc.c6.fail.map(f => ({ number: f.number, sourceRow: f.sourceRow, parentNumber: f.parentNumber, parentTitle: f.parentTitle })));
+  check('HSG c5 fail rows carry a real Row # (parent may be blank only for a top-level row)',
+    hsgQc.c5.fail.every(f => f.sourceRow > 1), hsgQc.c5.fail.length);
 
   console.log('\n== real samples: material — bought-out parts + CAD vs Item Master ==');
   const boughtOut = imQc.boughtOutParts(im);
@@ -525,6 +555,10 @@ if (cadPath && imPath) {
   check('none of the mismatches are naming-convention noise (spot check: no bare 1.4301-vs-AISI304-style pair)',
     !matRes.mismatches.some(m => m.number === '7-240-21292'), matRes.mismatches.map(m => m.number));
   check('304-vs-304L genuine difference still flagged', matRes.mismatches.some(m => m.number === '7-238-27981'), matRes.mismatches.map(m => m.number));
+  check('material mismatches carry Row # + parent info', matRes.mismatches.every(m => m.sourceRow > 1 && m.parentNumber),
+    matRes.mismatches.map(m => ({ number: m.number, sourceRow: m.sourceRow, parentNumber: m.parentNumber })));
+  check('bought-out parts carry Row # (all purchased parts are nested, none is the root row)',
+    boughtOut.every(b => b.sourceRow > 1), boughtOut.length);
   check('material check not-applicable without a flat-xlsx CAD source (e.g. PDF-only)',
     materialCompare.compareMaterial([], im).applicable === false);
 
@@ -539,7 +573,7 @@ if (cadPath && imPath) {
   const reSheet = reRead.Sheets['Item Master — data quality'];
   const reAoa = XLSX.utils.sheet_to_json(reSheet, { header: 1 });
   check('styled export re-parses with correct headers and row count',
-    reAoa[0].join(',') === 'Number,Row Order,Title,Description,Material,Producer,Producer Number,Item Qty,Quantity' &&
+    reAoa[0].join(',') === 'Number,Row #,Row Order,Parent Number,Parent Title,Title,Description,Material,Producer,Producer Number,Item Qty,Quantity' &&
     reAoa.length === im.rows.length + 1,
     { header: reAoa[0], rows: reAoa.length });
 
@@ -547,14 +581,14 @@ if (cadPath && imPath) {
   // one known c6 (material-missing) failure, and assert the fill survived.
   const c5Example = hsgQc.c5.fail[0];
   const c5Row = im.rows.findIndex(r => r.sourceRow === c5Example.sourceRow) + 1; // +1 for header
-  const c5DescCell = reSheet[XLSX.utils.encode_cell({ c: 3, r: c5Row })]; // Description is col index 3
+  const c5DescCell = reSheet[XLSX.utils.encode_cell({ c: 6, r: c5Row })]; // Description is col index 6
   check('c5-flagged Description cell carries the amber fill after round-trip',
     !!c5DescCell && !!c5DescCell.s && c5DescCell.s.fgColor && c5DescCell.s.fgColor.rgb === 'FDF3E1',
     c5DescCell && c5DescCell.s);
 
   const c6Example = hsgQc.c6.fail[0];
   const c6Row = im.rows.findIndex(r => r.sourceRow === c6Example.sourceRow) + 1;
-  const c6MatCell = reSheet[XLSX.utils.encode_cell({ c: 4, r: c6Row })]; // Material is col index 4
+  const c6MatCell = reSheet[XLSX.utils.encode_cell({ c: 7, r: c6Row })]; // Material is col index 7
   check('c6-flagged Material cell carries the red fill after round-trip',
     !!c6MatCell && !!c6MatCell.s && c6MatCell.s.fgColor && c6MatCell.s.fgColor.rgb === 'FDECEC',
     c6MatCell && c6MatCell.s);
@@ -565,7 +599,7 @@ if (cadPath && imPath) {
   // correct "not highlighted" signal).
   const cleanRowIdx = im.rows.findIndex(r =>
     !hsgQc.c5.fail.some(f => f.sourceRow === r.sourceRow) && !hsgQc.c6.fail.some(f => f.sourceRow === r.sourceRow));
-  const cleanCell = reSheet[XLSX.utils.encode_cell({ c: 4, r: cleanRowIdx + 1 })];
+  const cleanCell = reSheet[XLSX.utils.encode_cell({ c: 7, r: cleanRowIdx + 1 })];
   check('un-flagged Material cell carries no solid fill',
     !cleanCell || !cleanCell.s || cleanCell.s.patternType !== 'solid',
     cleanCell && cleanCell.s);
@@ -589,6 +623,10 @@ if (cadPath && imPath) {
   check('missing unique PNs = 183', res.missingTotal === 183, res.missingTotal);
   check('qty comparison disabled', res.qtyMismatches === null);
   check('IM-only = 28', res.imOnly.length === 28, res.imOnly.length);
+  check('IM-only rows carry sourceRow + parentNumber/parentTitle fields',
+    res.imOnly.every(r => typeof r.sourceRow === 'number' && r.sourceRow > 0 &&
+      typeof r.parentNumber === 'string' && typeof r.parentTitle === 'string'),
+    res.imOnly.slice(0, 3));
 
   const roots = res.missingRoots;
   check('actionable findings = 18', roots.length === 18, roots.length);

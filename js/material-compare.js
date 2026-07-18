@@ -161,6 +161,7 @@
     }
 
     var assemblies = imQc.buildAssemblyPathSet(im.rows);
+    var pathIndex = imQc.buildPathIndex(im.rows);
     var mismatches = [];
     var seenPn = new Set(); // same part can occur at several BOM positions; report it once
     for (var i = 0; i < im.rows.length; i++) {
@@ -174,12 +175,15 @@
       if (!cadMat) continue; // part not in this CAD source, or CAD has no material for it
       if (!materialsMatch(row.material, cadMat)) {
         seenPn.add(pnKey);
+        var parent = imQc.parentOf(pathIndex, row);
         mismatches.push({
           number: row.number,
           title: row.title,
           imMaterial: row.material,
           cadMaterial: cadMat,
           sourceRow: row.sourceRow,
+          parentNumber: parent ? parent.number : '',
+          parentTitle: parent ? parent.title : '',
         });
       }
     }
