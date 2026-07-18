@@ -605,17 +605,10 @@
     return rows;
   }
 
-  // Delegates to js/imqc-export.js (shared with the Node test suite, which
-  // asserts the fills actually round-trip through a real .xlsx).
-  function buildStyledImSheet(im, qc) {
-    return BC.imQcExport.buildStyledImSheet(XLSX, im, qc);
-  }
-
   $('btn-qc-export').addEventListener('click', function () {
     if (!state.imQc) return;
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
-    XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
     if (state.materialResult) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(materialSheetRows(state.materialResult)), 'Material vs CAD');
     }
@@ -1433,7 +1426,6 @@
 
     if (state.imQc) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
-      XLSX.utils.book_append_sheet(wb, buildStyledImSheet(state.im, state.imQc), 'Item Master — data quality');
     }
 
     if (state.materialResult) {

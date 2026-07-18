@@ -24,7 +24,6 @@ const { cadFlatParser } = require(path.join(rootDir, 'js/parsers/cad-flat-xlsx.j
 const { cadLeveledParser } = require(path.join(rootDir, 'js/parsers/cad-leveled.js'));
 const { detect } = require(path.join(rootDir, 'js/parsers/detect.js'));
 const { imQc } = require(path.join(rootDir, 'js/imqc.js'));
-const { imQcExport } = require(path.join(rootDir, 'js/imqc-export.js'));
 const { materialCompare } = require(path.join(rootDir, 'js/material-compare.js'));
 const { folder } = require(path.join(rootDir, 'js/folder.js'));
 const { lldboParser } = require(path.join(rootDir, 'js/parsers/lldbo.js'));
@@ -595,48 +594,6 @@ if (cadPath && imPath) {
     boughtOut.every(b => b.sourceRow > 1), boughtOut.length);
   check('material check not-applicable without a flat-xlsx CAD source (e.g. PDF-only)',
     materialCompare.compareMaterial([], im).applicable === false);
-
-  console.log('\n== real samples: styled QC export (Item Master — data quality sheet) ==');
-  const styledWs = imQcExport.buildStyledImSheet(XLSX, im, hsgQc);
-  const styledWb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(styledWb, styledWs, 'Item Master — data quality');
-  const styledBuf = XLSX.write(styledWb, { bookType: 'xlsx', type: 'buffer' });
-  // Re-read with cellStyles so the actual round-trip through a real .xlsx is
-  // verified, not just that the in-memory worksheet object carries `.s`.
-  const reRead = XLSX.read(styledBuf, { type: 'buffer', cellStyles: true });
-  const reSheet = reRead.Sheets['Item Master — data quality'];
-  const reAoa = XLSX.utils.sheet_to_json(reSheet, { header: 1 });
-  check('styled export re-parses with correct headers and row count',
-    reAoa[0].join(',') === 'Number,Row #,Row Order,Parent Number,Parent Title,Title,Description,Material,Producer,Producer Number,Item Qty,Quantity' &&
-    reAoa.length === im.rows.length + 1,
-    { header: reAoa[0], rows: reAoa.length });
-
-  // find the sheet row for one known c5 (description-missing) failure and
-  // one known c6 (material-missing) failure, and assert the fill survived.
-  const c5Example = hsgQc.c5.fail[0];
-  const c5Row = im.rows.findIndex(r => r.sourceRow === c5Example.sourceRow) + 1; // +1 for header
-  const c5DescCell = reSheet[XLSX.utils.encode_cell({ c: 6, r: c5Row })]; // Description is col index 6
-  check('c5-flagged Description cell carries the amber fill after round-trip',
-    !!c5DescCell && !!c5DescCell.s && c5DescCell.s.fgColor && c5DescCell.s.fgColor.rgb === 'FDF3E1',
-    c5DescCell && c5DescCell.s);
-
-  const c6Example = hsgQc.c6.fail[0];
-  const c6Row = im.rows.findIndex(r => r.sourceRow === c6Example.sourceRow) + 1;
-  const c6MatCell = reSheet[XLSX.utils.encode_cell({ c: 7, r: c6Row })]; // Material is col index 7
-  check('c6-flagged Material cell carries the red fill after round-trip',
-    !!c6MatCell && !!c6MatCell.s && c6MatCell.s.fgColor && c6MatCell.s.fgColor.rgb === 'FDECEC',
-    c6MatCell && c6MatCell.s);
-
-  // sanity: an un-flagged cell should carry no *solid* fill (SheetJS attaches
-  // a default {patternType:'none'} style object to every cell on read, so
-  // absence of a solid pattern — not absence of `.s` entirely — is the
-  // correct "not highlighted" signal).
-  const cleanRowIdx = im.rows.findIndex(r =>
-    !hsgQc.c5.fail.some(f => f.sourceRow === r.sourceRow) && !hsgQc.c6.fail.some(f => f.sourceRow === r.sourceRow));
-  const cleanCell = reSheet[XLSX.utils.encode_cell({ c: 7, r: cleanRowIdx + 1 })];
-  check('un-flagged Material cell carries no solid fill',
-    !cleanCell || !cleanCell.s || cleanCell.s.patternType !== 'solid',
-    cleanCell && cleanCell.s);
 
   const cadRes = detect.parseCadFromWorkbook(cadWb, XLSX);
   check('CAD parsed via flat parser', !!(cadRes && cadRes.ok && cadRes.ok.source === 'flat-xlsx'), cadRes && cadRes.ok && cadRes.ok.source);
