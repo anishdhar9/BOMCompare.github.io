@@ -11,11 +11,17 @@
  *             hasRevision, projectKey:{spn,pn}|null, sheetName, columns,
  *             warnings }
  *
- * `qty` is the resolved quantity used by compare.js's roll-up (Item Qty
- * preferred, Quantity as fallback). `itemQty`/`quantity` are kept separate
- * (unresolved) so imqc.js can flag when a manual edit to one doesn't match
- * the other — a real, observed failure mode: someone edits the displayed
- * Quantity without updating Item Qty (or vice versa).
+ * `qty` is the resolved quantity used by compare.js's roll-up. Some exports
+ * carry up to three quantity-ish columns -- "Item Quantity", "Quantity",
+ * and "Quantity Per Unit" -- but "Quantity" (values like "1 Each") is the
+ * one that reflects the actual as-released quantity, so it is preferred;
+ * "Item Qty"/"Item Quantity" is only a fallback when "Quantity" is absent.
+ * "Quantity Per Unit" is a distinct column (see `quantityPerUnit` keyword
+ * below) and must never be confused for "Quantity" during header matching.
+ * `itemQty`/`quantity` are kept separate (unresolved) so imqc.js can flag
+ * when a manual edit to one doesn't match the other — a real, observed
+ * failure mode: someone edits the displayed Quantity without updating Item
+ * Qty (or vice versa).
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
@@ -56,8 +62,12 @@
   // below), never a part number. "PN" is instead a producerNumber synonym.
   const FIELD_KEYWORDS = {
     number: ['number', 'part number', 'item number'],
-    qty: ['item qty', 'qty', 'qty.'],
+    qty: ['item qty', 'qty', 'qty.', 'item quantity'],
     qtyFallback: ['quantity'],
+    // Recognized (and matched exactly, ahead of qtyFallback's prefix match
+    // below) purely so "Quantity Per Unit" doesn't get mistaken for the
+    // "Quantity" column -- it is never captured into row data.
+    quantityPerUnit: ['quantity per unit'],
     path: ['row order', 'level', 'position', 'bom level'],
     title: ['title', 'name'],
     description: ['description', 'desc'],
@@ -161,8 +171,10 @@
         if (!number) continue;
         const itemQty = hdr.cols.qty >= 0 ? parseQty(row[hdr.cols.qty]) : null;
         const quantity = hdr.cols.qtyFallback >= 0 ? parseQty(row[hdr.cols.qtyFallback]) : null;
-        let qty = itemQty;
-        if (qty === null) qty = quantity;
+        // "Quantity" (e.g. "1 Each") is the as-released quantity; "Item
+        // Qty"/"Item Quantity" is only a fallback when "Quantity" is absent.
+        let qty = quantity;
+        if (qty === null) qty = itemQty;
         rows.push({
           number: number,
           title: hdr.cols.title >= 0 ? cellText(row[hdr.cols.title]) : '',

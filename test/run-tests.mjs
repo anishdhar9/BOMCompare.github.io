@@ -288,6 +288,38 @@ console.log('\n== synthetic: Item Master column-name robustness (itemmaster.js) 
   check('Item Master Revision column captured', imRev && imRev.hasRevision === true && imRev.rows[0].revision === '1', imRev && imRev.rows[0]);
   const imNoRev = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => revAoa.map(r => r.slice(0, 4)) } });
   check('hasRevision false when no Revision column exists', imNoRev && imNoRev.hasRevision === false, imNoRev && imNoRev.hasRevision);
+
+  // Some exports carry THREE quantity-ish columns: "Item Quantity",
+  // "Quantity", and "Quantity Per Unit". The resolved `qty` used for
+  // comparison must come from "Quantity" (as-released qty, e.g. "1 Each"),
+  // never "Item Quantity" and never "Quantity Per Unit".
+  const threeQtyAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Item Quantity', 'Quantity', 'Quantity Per Unit'],
+    ['MACH-01', '-', 'Machine', 'desc', '1', '1 Each', '1 Each'],
+    ['PART-A', '1', 'Part A', 'desc', '9', '4 Each', '2 Each'],
+  ];
+  const imThreeQty = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => threeQtyAoa } });
+  check('"Item Quantity" recognized as the Item Qty column', imThreeQty && imThreeQty.rows[1].itemQty === 9, imThreeQty && imThreeQty.rows[1]);
+  check('"Quantity" (not "Quantity Per Unit") recognized as the Quantity column', imThreeQty && imThreeQty.rows[1].quantity === 4, imThreeQty && imThreeQty.rows[1]);
+  check('resolved qty prefers "Quantity" over "Item Quantity"', imThreeQty && imThreeQty.rows[1].qty === 4, imThreeQty && imThreeQty.rows[1]);
+
+  // "Quantity" falls back to "Item Qty" only when "Quantity" itself is absent.
+  const onlyItemQtyAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Item Qty'],
+    ['PART-A', '1', 'Part A', 'desc', '7'],
+  ];
+  const imOnlyItemQty = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => onlyItemQtyAoa } });
+  check('resolved qty falls back to Item Qty when no Quantity column exists', imOnlyItemQty && imOnlyItemQty.rows[0].qty === 7, imOnlyItemQty && imOnlyItemQty.rows[0]);
+
+  // Column order shouldn't matter: "Quantity Per Unit" listed BEFORE
+  // "Quantity" must still not be mistaken for it.
+  const reorderedAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity Per Unit', 'Quantity'],
+    ['PART-A', '1', 'Part A', 'desc', '2 Each', '5 Each'],
+  ];
+  const imReordered = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => reorderedAoa } });
+  check('"Quantity Per Unit" before "Quantity" in column order still resolves to "Quantity"',
+    imReordered && imReordered.rows[0].qty === 5, imReordered && imReordered.rows[0]);
 }
 
 /* ---------------- synthetic: dual-source reference detection ---------------- */

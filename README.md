@@ -90,12 +90,19 @@ The Vault/ERP item BOM grid export (`.xls`/`.xlsx`) with a `Number` header colum
 `Row Order` (dotted position paths like `2.8.1`) enables hierarchy-aware grouping and
 quantity roll-up; `Item Qty`/`Quantity` enables quantity comparison.
 
+Some exports carry more than one quantity-ish column (e.g. `Item Qty`, `Quantity`,
+`Unit Qty`) that don't always agree — real exports have been seen where `Item Qty` sits at
+a stale `1` while `Quantity` correctly reflects a multiplier like `4 Each`. The rolled-up
+quantity used for comparison always comes from `Quantity` (the as-released quantity);
+`Item Qty` is only used as a fallback when a `Quantity` column isn't present at all.
+
 Columns are located by header keyword, not position — different exports (different plants,
 different PLM configurations) don't all spell or order headers the same way, so common
 synonyms are recognized (e.g. "Part Number"/"Item Number" for `Number`, "Qty" for `Item Qty`,
-"Level"/"Position" for `Row Order`). One exception, deliberately: "PN" is **not** treated as a
+"Level"/"Position" for `Row Order`). Two exceptions, deliberately: "PN" is **not** treated as a
 `Number` synonym — in this organization's convention "PN" means Producer Number (half of the
-project's SPN/PN key), never a part number.
+project's SPN/PN key), never a part number — and "Quantity Per Unit" is never treated as a
+`Quantity` synonym, so it can't be mistaken for the real quantity column.
 
 ## What the comparison does
 
