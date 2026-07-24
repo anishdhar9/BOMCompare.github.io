@@ -119,9 +119,22 @@
   }
 
   // Check 3: Quantity (display, e.g. "2 Each") vs Item Qty (numeric) must agree.
+  // Only meaningful when BOTH columns exist -- with just one of them there is
+  // nothing to cross-check, so the check reports "not applicable" rather than
+  // flagging every row (an Item-Qty-less export previously produced a storm of
+  // false mismatches). Note a per-unit column ("QTY per Unit"/"Unit Qty") is
+  // deliberately NOT treated as Item Qty by the parser, so it can't stand in
+  // for a real Item Qty here.
   function checkQuantityVsItemQty(im, pathIndex) {
-    if (im.rows.every(function (r) { return r.itemQty === null && r.quantity === null; })) {
-      return { applicable: false, reason: 'Neither "Item Qty" nor "Quantity" column found in this export.' };
+    const hasItemQty = im.hasItemQty !== undefined ? im.hasItemQty : im.rows.some(function (r) { return r.itemQty !== null; });
+    const hasQuantity = im.hasQuantity !== undefined ? im.hasQuantity : im.rows.some(function (r) { return r.quantity !== null; });
+    if (!hasItemQty || !hasQuantity) {
+      const reason = !hasItemQty && !hasQuantity
+        ? 'Needs both a "Quantity" and an "Item Qty" column to cross-check; this export has neither.'
+        : !hasItemQty
+          ? 'Needs an "Item Qty" column to cross-check against "Quantity"; this export has only "Quantity".'
+          : 'Needs a "Quantity" column to cross-check against "Item Qty"; this export has only "Item Qty".';
+      return { applicable: false, reason: reason };
     }
     const fail = [];
     for (const row of im.rows) {

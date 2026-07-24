@@ -8,8 +8,8 @@
  *             itemQty,quantity,quantityText,producer,producerNumber,
  *             entityIcon,material,revision,path,rowType,sourceRow}],
  *             hasPaths, hasEntityIcon, hasProducer, hasMaterial,
- *             hasRevision, projectKey:{spn,pn}|null, sheetName, columns,
- *             warnings }
+ *             hasRevision, hasItemQty, hasQuantity,
+ *             projectKey:{spn,pn}|null, sheetName, columns, warnings }
  *
  * `qty` is the resolved quantity used by compare.js's roll-up. Some exports
  * carry up to three quantity-ish columns -- "Item Quantity", "Quantity",
@@ -64,10 +64,19 @@
     number: ['number', 'part number', 'item number'],
     qty: ['item qty', 'qty', 'qty.', 'item quantity'],
     qtyFallback: ['quantity'],
-    // Recognized (and matched exactly, ahead of qtyFallback's prefix match
-    // below) purely so "Quantity Per Unit" doesn't get mistaken for the
-    // "Quantity" column -- it is never captured into row data.
-    quantityPerUnit: ['quantity per unit'],
+    // Per-unit quantity columns ("Quantity Per Unit", "QTY per Unit", "Unit
+    // Qty", ...) are a DIFFERENT concept from the total/as-released
+    // "Quantity" or the "Item Qty": they hold the quantity of this line per
+    // single unit of its parent (usually 1, even when the total Quantity is
+    // 4). They must never be captured as qty/qtyFallback, or Check 3 flags
+    // every multi-qty row as a false mismatch. Enumerated here (matched
+    // exactly, and via the longest-prefix rule in matchField) so a bare
+    // 'qty'/'quantity' prefix can't grab them. Recognized only to block that
+    // collision -- never captured into row data.
+    quantityPerUnit: [
+      'quantity per unit', 'qty per unit', 'qty. per unit',
+      'quantity/unit', 'qty/unit', 'unit qty', 'unit quantity', 'qty per parent',
+    ],
     path: ['row order', 'level', 'position', 'bom level'],
     title: ['title', 'name'],
     description: ['description', 'desc'],
@@ -85,16 +94,23 @@
   function matchField(headerText) {
     const h = headerText.toLowerCase().replace(/\s+/g, ' ').trim();
     if (!h) return null;
+    // 1. an exact header match wins outright.
     for (const field of Object.keys(FIELD_KEYWORDS)) {
       if (FIELD_KEYWORDS[field].indexOf(h) !== -1) return field;
     }
-    // prefix matches for compound headers like 'Title (Item,CO)'
+    // 2. otherwise, prefix match for compound headers like 'Title (Item,CO)'
+    //    or 'QTY per Unit (Each)'. When several keywords are a prefix, the
+    //    LONGEST (most specific) one wins -- so a short 'qty' can never beat a
+    //    specific 'qty per unit', regardless of column/field order.
+    let best = null, bestLen = 0;
     for (const field of Object.keys(FIELD_KEYWORDS)) {
       for (const kw of FIELD_KEYWORDS[field]) {
-        if (kw.length >= 3 && h.indexOf(kw) === 0) return field;
+        if (kw.length >= 3 && h.indexOf(kw) === 0 && kw.length > bestLen) {
+          best = field; bestLen = kw.length;
+        }
       }
     }
-    return null;
+    return best;
   }
 
   function findHeader(aoa) {
@@ -210,6 +226,8 @@
         hasEntityIcon: hdr.cols.entityIcon >= 0,
         hasMaterial: hdr.cols.material >= 0,
         hasRevision: hdr.cols.revision >= 0,
+        hasItemQty: hdr.cols.qty >= 0,
+        hasQuantity: hdr.cols.qtyFallback >= 0,
         projectKey: extractProjectKey(rootRow),
         columns: hdr.cols,
         warnings: warnings,
