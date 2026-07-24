@@ -99,10 +99,16 @@ quantity used for comparison always comes from `Quantity` (the as-released quant
 Columns are located by header keyword, not position — different exports (different plants,
 different PLM configurations) don't all spell or order headers the same way, so common
 synonyms are recognized (e.g. "Part Number"/"Item Number" for `Number`, "Qty" for `Item Qty`,
-"Level"/"Position" for `Row Order`). Two exceptions, deliberately: "PN" is **not** treated as a
-`Number` synonym — in this organization's convention "PN" means Producer Number (half of the
-project's SPN/PN key), never a part number — and "Quantity Per Unit" is never treated as a
-`Quantity` synonym, so it can't be mistaken for the real quantity column.
+"Level"/"Position" for `Row Order`), and header matching is longest-keyword-wins so a specific
+header always beats a shorter generic one regardless of column order. Two exceptions,
+deliberately: "PN" is **not** treated as a `Number` synonym — in this organization's convention
+"PN" means Producer Number (half of the project's SPN/PN key), never a part number — and any
+**per-unit** quantity column ("QTY per Unit", "Unit Qty", "Quantity Per Unit") is never treated
+as the `Quantity` or `Item Qty` column, since it holds the quantity per single unit of the
+parent (usually 1, even when the total Quantity is 4) and would otherwise produce a storm of
+false Check-3 mismatches on every multi-qty row. Because the same BOM can be exported by
+different people with different Vault columns enabled, every result labels the exact source
+file(s) it came from, so two exports of the same BOM stay traceable and consistent.
 
 ## What the comparison does
 
@@ -128,6 +134,18 @@ project's SPN/PN key), never a part number — and "Quantity Per Unit" is never 
 - **In Item Master only:** items whose number never appears in the CAD BOM — stale or
   manually added entries worth reviewing.
 
+## Overview dashboard
+
+A single **Overview** panel sits at the top of the page, above every detail section. It shows
+one clickable tile per flag value — findings needing action, quantity mismatches, material and
+revision mismatches vs CAD, and Item Master quality issues — colour-coded (red/amber/green, or
+grey when a check isn't applicable). Tiles appear as data loads: material/revision/quality the
+moment the Item Master (and a CAD source) load, the compare tiles once **Compare BOMs** is run.
+Clicking a tile jumps straight to that section and flashes it, so someone unfamiliar with the
+BOM system gets the whole picture at a glance and never has to scroll to the bottom to find a
+result. The dashboard, and each detail section, is captioned with the exact source file(s)
+being compared.
+
 ## Item Master data quality
 
 Runs on the Item Master alone — no CAD BOM needed — the moment it loads. Catches manual
@@ -139,7 +157,9 @@ different failure mode than CAD-vs-BOM drift:
 2. **End of Line integrity**: the "END OF LINE" row should carry the organization's fixed
    part number and a whole-number Row Order.
 3. **Quantity vs Item Qty**: these two columns should agree on every row — a mismatch means
-   one was edited without updating the other.
+   one was edited without updating the other. Only runs when the export actually carries
+   *both* a `Quantity` and an `Item Qty` column; with only one of them there is nothing to
+   cross-check, so it reports "not applicable" rather than flagging every row.
 4. **Entity Icon status**: should read "Normal" everywhere, when that column is present
    (reports "not applicable" rather than false-flagging every row when it's absent).
 5. **Title/Description completeness**: every row should have both. Purchased/catalog parts

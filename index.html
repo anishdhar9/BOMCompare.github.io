@@ -52,10 +52,20 @@
       </div>
     </section>
 
+    <section class="dashboard hidden" id="dashboard">
+      <div class="dash-head">
+        <h2>Overview</h2>
+        <p class="dash-source" id="dash-source"></p>
+      </div>
+      <div class="dash-tiles" id="dash-tiles"></div>
+      <p class="dash-hint">Each tile is a flag count — click one to jump to its details below.</p>
+    </section>
+
     <section class="im-qc hidden" id="im-qc">
       <div class="im-qc-head">
         <div>
           <h2>Item Master data quality</h2>
+          <p class="source-line" id="qc-source"></p>
           <p class="dz-hint">Checks the Item Master file by itself — no CAD BOM needed. Catches manual edits in Vault/ERP that don't agree with other fields on the same row (e.g. someone changes Quantity without updating Item Qty).</p>
         </div>
         <button type="button" class="btn btn-small" id="btn-qc-export">Download QC report</button>
@@ -108,6 +118,8 @@
     <section class="notices" id="notices"></section>
 
     <section class="results hidden" id="results">
+      <h2 class="results-title">CAD BOM vs Item Master</h2>
+      <p class="source-line" id="results-source"></p>
       <div class="summary" id="summary"></div>
 
       <div class="toolbar">
@@ -137,6 +149,7 @@
       <details>
         <summary>How it works & assumptions</summary>
         <ul>
+          <li><strong>Overview dashboard:</strong> a panel at the top shows one clickable tile per flag value (findings, quantity/material/revision mismatches, Item Master quality issues), colour-coded, appearing as data loads. Click a tile to jump straight to its details below. Every result — the dashboard and each section — is captioned with the exact source file(s) being compared, so two exports of the same BOM (with different Vault columns enabled) stay traceable.</li>
           <li><strong>Match key:</strong> part number (Vault item “Number”), case-insensitive.</li>
           <li><strong>CAD BOM sources</strong> (upload one or, better, two together):
             <ul>
@@ -150,7 +163,7 @@
           <li><strong>Reference items</strong> (needs two CAD sources): components in the full CAD structure (PDF or Vault paste) that are absent from the Inventor BOM export — the exact list of what is currently flagged <em>BOM Reference</em> in the model, each marked whether it also made it into the Item Master. Review it to confirm every entry is intentional.</li>
           <li><strong>Quantity mismatches:</strong> rolled-up total quantity per part (own qty × parent assembly quantities, summed over all occurrences) compared between CAD and Item Master. Requires a source with a QTY column — that's the Inventor BOM export; the Vault PDF and flat paste carry no quantities.</li>
           <li><strong>In Item Master only:</strong> items whose number never appears in the CAD BOM — stale or manually added entries worth reviewing.</li>
-          <li><strong>Item Master data quality</strong> (runs the moment the Item Master loads, no CAD BOM required): seven checks on the file itself — Producer/Producer Number reflected in the top-level row's Description; the "END OF LINE" entry has the organization's fixed part number and a whole-number Row Order; the Quantity and Item Qty columns agree on every row (catches a manual edit to one that wasn't mirrored to the other); when the export includes an Entity Icon column, that it reads "Normal" everywhere; every row has a Title and Description (purchased/catalog parts, numbered "X-999-…", are only flagged when both are missing); every non-assembly, non-purchased row has a Material; and the same part number used at more than one BOM position carries the same Revision everywhere. A check can pass on its own terms but still turn amber ("OK, but see below") when a related CAD-vs-Item-Master comparison finds a real difference.</li>
+          <li><strong>Item Master data quality</strong> (runs the moment the Item Master loads, no CAD BOM required): seven checks on the file itself — Producer/Producer Number reflected in the top-level row's Description; the "END OF LINE" entry has the organization's fixed part number and a whole-number Row Order; the Quantity and Item Qty columns agree on every row (catches a manual edit to one that wasn't mirrored to the other — only when the export carries both columns; a per-unit column like "QTY per Unit" is never mistaken for Item Qty); when the export includes an Entity Icon column, that it reads "Normal" everywhere; every row has a Title and Description (purchased/catalog parts, numbered "X-999-…", are only flagged when both are missing); every non-assembly, non-purchased row has a Material; and the same part number used at more than one BOM position carries the same Revision everywhere. A check can pass on its own terms but still turn amber ("OK, but see below") when a related CAD-vs-Item-Master comparison finds a real difference.</li>
           <li><strong>Material: CAD vs Item Master</strong> — active once a loaded CAD source actually carries material (the flat Vault paste, or an Inventor BOM export that included the Material column; Vault's exported columns are user-configurable, so this varies by file). Compares material for manufactured parts, normalizing naming-convention differences (DIN vs AISI grade, spacing, abbreviation, language) so only genuine differences are flagged — including a grade's L-suffix (304 vs 304L), which stays significant. Purchased/catalog parts ("X-999-…") are excluded here too, and instead get a full always-collapsed <strong>Bought-Out Parts</strong> reference panel (Item Master material and CAD material side by side, mismatches marked, never counted as findings).</li>
           <li><strong>Revision: CAD vs Item Master</strong> — active once a loaded CAD source carries revision data and the Item Master has a Revision column. Unlike material there's no naming-convention ambiguity, so revision values are compared directly (trimmed, case-insensitive) — any difference is a genuine finding, shown both in the main summary row's "revision mismatches" card and in its own detail section.</li>
           <li><strong>Export file name:</strong> when the Item Master's top-level row carries the organization's SPN/PN project key (from its Producer / Producer Number columns, or parsed from the Description text), both the comparison export and the QC report include it in the file name.</li>
