@@ -512,6 +512,7 @@
     $('qc-sections').innerHTML = '';
     $('qc-callout').classList.add('hidden');
     $('qc-callout').textContent = '';
+    renderDashboard();
   }
 
   // A check can PASS on its own terms (e.g. every part has a Material
@@ -587,6 +588,7 @@
     const qc = state.imQc;
     if (!qc) { hideImQc(); return; }
     $('im-qc').classList.remove('hidden');
+    setSourceLine($('qc-source'), { imOnly: true });
     const summary = $('qc-summary');
     summary.innerHTML = '';
     const sections = $('qc-sections');
@@ -616,6 +618,123 @@
       callout.textContent = '';
       callout.classList.add('hidden');
     }
+    renderDashboard();
+  }
+
+  /* ---------------- overview dashboard + source provenance ---------------- */
+
+  // Human label for a CAD source, including its file name, so a result can
+  // always be traced back to the exact export that produced it — different
+  // people export with different Vault columns enabled, which changes which
+  // checks are even available.
+  function cadSourceLabel(s) {
+    let lbl = { 'flat-xlsx': 'Vault flat export', 'pdf': 'Vault PDF', 'leveled-sheet': 'Leveled table' }[s.source] || s.source;
+    if (s.source === 'leveled-sheet' && s.hasStructure) lbl = 'Inventor BOM export';
+    return lbl + (s.fileName ? ' — ' + s.fileName : '');
+  }
+
+  function imSourceLabel() {
+    if (!state.im) return '';
+    return (state.im.fileName || 'Item Master') + ' · ' + state.im.rows.length + ' rows';
+  }
+
+  // Fills a .source-line element with "CAD BOM: … ↔ Item Master: …" (built
+  // with DOM nodes, not innerHTML, since file names are untrusted text).
+  // opts.imOnly shows just the Item Master side (for the IM-only QC section).
+  function setSourceLine(el, opts) {
+    if (!el) return;
+    opts = opts || {};
+    el.textContent = '';
+    const add = function (label, value) {
+      if (el.childNodes.length) el.appendChild(document.createTextNode('  ↔  '));
+      const b = document.createElement('strong');
+      b.textContent = label + ' ';
+      el.appendChild(b);
+      el.appendChild(document.createTextNode(value));
+    };
+    if (!opts.imOnly && state.cadSources.length) {
+      add('CAD BOM:', state.cadSources.map(cadSourceLabel).join('  +  '));
+    }
+    if (state.im) add('Item Master:', imSourceLabel());
+  }
+
+  function jumpTo(sectionId, tab) {
+    const sec = $(sectionId);
+    if (!sec) return;
+    if (sectionId === 'results') {
+      if (!state.result) return; // nothing to jump to until a compare has run
+      if (tab) switchTab(tab);
+    }
+    sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    sec.classList.remove('section-flash');
+    void sec.offsetWidth; // reflow so the flash animation retriggers on repeat clicks
+    sec.classList.add('section-flash');
+  }
+
+  function dashTileEl(t) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'flag-tile' + (t.cls ? ' ' + t.cls : '');
+    const num = document.createElement('div'); num.className = 'num'; num.textContent = t.num;
+    const lbl = document.createElement('div'); lbl.className = 'lbl'; lbl.textContent = t.label;
+    b.appendChild(num); b.appendChild(lbl);
+    if (t.sub) { const s = document.createElement('div'); s.className = 'sub'; s.textContent = t.sub; b.appendChild(s); }
+    b.addEventListener('click', t.onClick);
+    return b;
+  }
+
+  // The top-of-page flag summary: one clickable tile per flag value, each
+  // jumping to (and flashing) its detail section below. Rebuilt from full
+  // state on every change, so it always reflects whatever has been loaded and
+  // compared so far — QC/material/revision appear as soon as the Item Master
+  // (and a CAD source) load; the compare tiles appear once "Compare" is run.
+  function renderDashboard() {
+    const dash = $('dashboard');
+    if (!state.im && !state.cadSources.length) { dash.classList.add('hidden'); return; }
+    dash.classList.remove('hidden');
+    setSourceLine($('dash-source'));
+
+    const wrap = $('dash-tiles');
+    wrap.innerHTML = '';
+    const tiles = [];
+
+    const res = state.result;
+    if (res) {
+      tiles.push({ num: res.actionableCount, label: 'Findings needing action',
+        cls: res.actionableCount ? 'red' : 'pass', onClick: function () { jumpTo('results', 'missing'); } });
+      tiles.push({ num: res.qtyMismatches === null ? '—' : res.qtyMismatches.length, label: 'Quantity mismatches',
+        cls: res.qtyMismatches === null ? 'na' : (res.qtyMismatches.length ? 'amber' : 'pass'),
+        onClick: function () { jumpTo('results', 'qty'); } });
+    }
+
+    const mat = state.materialResult;
+    if (mat) tiles.push({ num: mat.applicable ? mat.mismatches.length : '—', label: 'Material mismatches vs CAD',
+      cls: mat.applicable ? (mat.mismatches.length ? 'amber' : 'pass') : 'na',
+      onClick: function () { jumpTo('material-sections'); } });
+
+    const rev = state.revisionResult;
+    if (rev) tiles.push({ num: rev.applicable ? rev.mismatches.length : '—', label: 'Revision mismatches vs CAD',
+      cls: rev.applicable ? (rev.mismatches.length ? 'amber' : 'pass') : 'na',
+      onClick: function () { jumpTo('revision-sections'); } });
+
+    const qc = state.imQc;
+    if (qc) {
+      let flagged = 0, applicable = 0;
+      for (const check of QC_CHECKS) { const r = qc[check.key]; if (r.applicable) { applicable++; if (r.fail.length) flagged++; } }
+      tiles.push({ num: flagged, label: 'Item Master quality issues',
+        sub: flagged ? 'of ' + applicable + ' applicable checks' : 'all ' + applicable + ' checks clean',
+        cls: flagged ? 'red' : 'pass', onClick: function () { jumpTo('im-qc'); } });
+    }
+
+    const lld = state.lldboResult;
+    if (lld) {
+      const n = lld.missingFromIm.length + lld.qtyMismatches.length;
+      tiles.push({ num: n, label: 'Long-lead (LLDBO) issues',
+        cls: lld.projectKeyMismatch ? 'red' : (n ? 'amber' : 'pass'),
+        onClick: function () { jumpTo('lldbo-panel'); } });
+    }
+
+    for (const t of tiles) wrap.appendChild(dashTileEl(t));
   }
 
   // AOA rows for the "Item Master QC" export sheet, shared by the main
@@ -654,6 +773,7 @@
     $('lldbo-project-warning').textContent = '';
     $('lldbo-summary').innerHTML = '';
     $('lldbo-sections').innerHTML = '';
+    renderDashboard();
   }
 
   function runLldboCheck() {
@@ -752,6 +872,7 @@
       LLDBO_QTY_COLS, res.qtyMismatches,
       '✓ Quantities agree for every part found in both.'
     ));
+    renderDashboard();
   }
 
   // AOA rows for the LLDBO check export sheet.
@@ -792,6 +913,7 @@
 
   function hideMaterialResults() {
     $('material-sections').innerHTML = '';
+    renderDashboard();
   }
 
   function runMaterialCheck() {
@@ -887,6 +1009,7 @@
     }
 
     sections.appendChild(boughtOutSection(res.boughtOut));
+    renderDashboard();
   }
 
   function materialSheetRows(res) {
@@ -916,6 +1039,7 @@
 
   function hideRevisionResults() {
     $('revision-sections').innerHTML = '';
+    renderDashboard();
   }
 
   function runRevisionCheck() {
@@ -956,6 +1080,7 @@
       note.appendChild(body);
       sections.appendChild(note);
     }
+    renderDashboard();
   }
 
   function revisionSheetRows(res) {
@@ -1025,7 +1150,8 @@
 
   function renderResults() {
     const res = state.result;
-    if (!res) return;
+    if (!res) { renderDashboard(); return; }
+    setSourceLine($('results-source'));
 
     // summary cards
     const summary = $('summary');
@@ -1065,6 +1191,7 @@
     renderRefTab();
     renderQtyTab();
     renderImOnlyTab();
+    renderDashboard();
   }
 
   /* ----- tree tables (missing + reference tabs) ----- */

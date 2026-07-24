@@ -288,6 +288,67 @@ console.log('\n== synthetic: Item Master column-name robustness (itemmaster.js) 
   check('Item Master Revision column captured', imRev && imRev.hasRevision === true && imRev.rows[0].revision === '1', imRev && imRev.rows[0]);
   const imNoRev = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => revAoa.map(r => r.slice(0, 4)) } });
   check('hasRevision false when no Revision column exists', imNoRev && imNoRev.hasRevision === false, imNoRev && imNoRev.hasRevision);
+
+  // Some exports carry THREE quantity-ish columns: "Item Quantity",
+  // "Quantity", and "Quantity Per Unit". The resolved `qty` used for
+  // comparison must come from "Quantity" (as-released qty, e.g. "1 Each"),
+  // never "Item Quantity" and never "Quantity Per Unit".
+  const threeQtyAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Item Quantity', 'Quantity', 'Quantity Per Unit'],
+    ['MACH-01', '-', 'Machine', 'desc', '1', '1 Each', '1 Each'],
+    ['PART-A', '1', 'Part A', 'desc', '9', '4 Each', '2 Each'],
+  ];
+  const imThreeQty = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => threeQtyAoa } });
+  check('"Item Quantity" recognized as the Item Qty column', imThreeQty && imThreeQty.rows[1].itemQty === 9, imThreeQty && imThreeQty.rows[1]);
+  check('"Quantity" (not "Quantity Per Unit") recognized as the Quantity column', imThreeQty && imThreeQty.rows[1].quantity === 4, imThreeQty && imThreeQty.rows[1]);
+  check('resolved qty prefers "Quantity" over "Item Quantity"', imThreeQty && imThreeQty.rows[1].qty === 4, imThreeQty && imThreeQty.rows[1]);
+
+  // "Quantity" falls back to "Item Qty" only when "Quantity" itself is absent.
+  const onlyItemQtyAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Item Qty'],
+    ['PART-A', '1', 'Part A', 'desc', '7'],
+  ];
+  const imOnlyItemQty = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => onlyItemQtyAoa } });
+  check('resolved qty falls back to Item Qty when no Quantity column exists', imOnlyItemQty && imOnlyItemQty.rows[0].qty === 7, imOnlyItemQty && imOnlyItemQty.rows[0]);
+
+  // Column order shouldn't matter: "Quantity Per Unit" listed BEFORE
+  // "Quantity" must still not be mistaken for it.
+  const reorderedAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity Per Unit', 'Quantity'],
+    ['PART-A', '1', 'Part A', 'desc', '2 Each', '5 Each'],
+  ];
+  const imReordered = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => reorderedAoa } });
+  check('"Quantity Per Unit" before "Quantity" in column order still resolves to "Quantity"',
+    imReordered && imReordered.rows[0].qty === 5, imReordered && imReordered.rows[0]);
+
+  // Real-world regression (the two 726020775 EBOM exports): "QTY per Unit"
+  // must NOT be captured as the Item Qty column. Before the longest-prefix
+  // fix, the 'qty' prefix grabbed "QTY per Unit" into the Item Qty slot,
+  // producing a storm of false Check-3 mismatches on every multi-qty row.
+  const qtyPerUnitAoa = [
+    ['Number', 'Revision', 'Row Order', 'Position Number', 'Quantity', 'Title (Item,CO)', 'Description (Item,CO)', 'Material', 'QTY per Unit'],
+    ['MACH-01', '1', '-', '', '1 Each', 'Machine', 'desc', '', '1'],
+    ['PART-A', '1', '1', '1', '4 Each', 'Part A', 'desc', 'AISI 304', '1'],
+  ];
+  const imQpu = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => qtyPerUnitAoa } });
+  check('"QTY per Unit" is NOT captured as the Item Qty column', imQpu && imQpu.hasItemQty === false && imQpu.columns.qty === -1, imQpu && imQpu.columns);
+  check('with only "Quantity" present, hasQuantity true / hasItemQty false', imQpu && imQpu.hasQuantity === true && imQpu.hasItemQty === false, imQpu && { q: imQpu.hasQuantity, iq: imQpu.hasItemQty });
+  check('"QTY per Unit" export resolves qty from "Quantity" (4), not per-unit (1)', imQpu && imQpu.rows[1].qty === 4, imQpu && imQpu.rows[1]);
+  // Check 3 must be NOT applicable here (no genuine Item Qty column to
+  // cross-check against), never a mass-flag of every row.
+  const qpuQc = imQc.runChecks(imQpu);
+  check('Check 3 not-applicable when there is a Quantity but no Item Qty column (no false mismatch storm)',
+    qpuQc.c3.applicable === false && /Item Qty/.test(qpuQc.c3.reason), qpuQc.c3);
+
+  // "Unit Qty" is likewise per-unit and must not displace a genuine "Item
+  // Qty" that sits in the same export (as the 726020768 EBOM does).
+  const unitQtyAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity', 'Unit Qty', 'Item Qty'],
+    ['PART-A', '1', 'Part A', 'desc', '4 Each', '1 Each', '4'],
+  ];
+  const imUnitQty = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => unitQtyAoa } });
+  check('"Unit Qty" does not displace a genuine "Item Qty" column', imUnitQty && imUnitQty.rows[0].itemQty === 4 && imUnitQty.hasItemQty === true, imUnitQty && imUnitQty.rows[0]);
+  check('with a genuine Item Qty present, Check 3 is applicable', imQc.runChecks(imUnitQty).c3.applicable === true, imQc.runChecks(imUnitQty).c3);
 }
 
 /* ---------------- synthetic: dual-source reference detection ---------------- */

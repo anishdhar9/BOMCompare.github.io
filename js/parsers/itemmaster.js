@@ -8,14 +8,20 @@
  *             itemQty,quantity,quantityText,producer,producerNumber,
  *             entityIcon,material,revision,path,rowType,sourceRow}],
  *             hasPaths, hasEntityIcon, hasProducer, hasMaterial,
- *             hasRevision, projectKey:{spn,pn}|null, sheetName, columns,
- *             warnings }
+ *             hasRevision, hasItemQty, hasQuantity,
+ *             projectKey:{spn,pn}|null, sheetName, columns, warnings }
  *
- * `qty` is the resolved quantity used by compare.js's roll-up (Item Qty
- * preferred, Quantity as fallback). `itemQty`/`quantity` are kept separate
- * (unresolved) so imqc.js can flag when a manual edit to one doesn't match
- * the other — a real, observed failure mode: someone edits the displayed
- * Quantity without updating Item Qty (or vice versa).
+ * `qty` is the resolved quantity used by compare.js's roll-up. Some exports
+ * carry up to three quantity-ish columns -- "Item Quantity", "Quantity",
+ * and "Quantity Per Unit" -- but "Quantity" (values like "1 Each") is the
+ * one that reflects the actual as-released quantity, so it is preferred;
+ * "Item Qty"/"Item Quantity" is only a fallback when "Quantity" is absent.
+ * "Quantity Per Unit" is a distinct column (see `quantityPerUnit` keyword
+ * below) and must never be confused for "Quantity" during header matching.
+ * `itemQty`/`quantity` are kept separate (unresolved) so imqc.js can flag
+ * when a manual edit to one doesn't match the other — a real, observed
+ * failure mode: someone edits the displayed Quantity without updating Item
+ * Qty (or vice versa).
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
@@ -56,8 +62,21 @@
   // below), never a part number. "PN" is instead a producerNumber synonym.
   const FIELD_KEYWORDS = {
     number: ['number', 'part number', 'item number'],
-    qty: ['item qty', 'qty', 'qty.'],
+    qty: ['item qty', 'qty', 'qty.', 'item quantity'],
     qtyFallback: ['quantity'],
+    // Per-unit quantity columns ("Quantity Per Unit", "QTY per Unit", "Unit
+    // Qty", ...) are a DIFFERENT concept from the total/as-released
+    // "Quantity" or the "Item Qty": they hold the quantity of this line per
+    // single unit of its parent (usually 1, even when the total Quantity is
+    // 4). They must never be captured as qty/qtyFallback, or Check 3 flags
+    // every multi-qty row as a false mismatch. Enumerated here (matched
+    // exactly, and via the longest-prefix rule in matchField) so a bare
+    // 'qty'/'quantity' prefix can't grab them. Recognized only to block that
+    // collision -- never captured into row data.
+    quantityPerUnit: [
+      'quantity per unit', 'qty per unit', 'qty. per unit',
+      'quantity/unit', 'qty/unit', 'unit qty', 'unit quantity', 'qty per parent',
+    ],
     path: ['row order', 'level', 'position', 'bom level'],
     title: ['title', 'name'],
     description: ['description', 'desc'],
@@ -75,16 +94,23 @@
   function matchField(headerText) {
     const h = headerText.toLowerCase().replace(/\s+/g, ' ').trim();
     if (!h) return null;
+    // 1. an exact header match wins outright.
     for (const field of Object.keys(FIELD_KEYWORDS)) {
       if (FIELD_KEYWORDS[field].indexOf(h) !== -1) return field;
     }
-    // prefix matches for compound headers like 'Title (Item,CO)'
+    // 2. otherwise, prefix match for compound headers like 'Title (Item,CO)'
+    //    or 'QTY per Unit (Each)'. When several keywords are a prefix, the
+    //    LONGEST (most specific) one wins -- so a short 'qty' can never beat a
+    //    specific 'qty per unit', regardless of column/field order.
+    let best = null, bestLen = 0;
     for (const field of Object.keys(FIELD_KEYWORDS)) {
       for (const kw of FIELD_KEYWORDS[field]) {
-        if (kw.length >= 3 && h.indexOf(kw) === 0) return field;
+        if (kw.length >= 3 && h.indexOf(kw) === 0 && kw.length > bestLen) {
+          best = field; bestLen = kw.length;
+        }
       }
     }
-    return null;
+    return best;
   }
 
   function findHeader(aoa) {
@@ -161,8 +187,10 @@
         if (!number) continue;
         const itemQty = hdr.cols.qty >= 0 ? parseQty(row[hdr.cols.qty]) : null;
         const quantity = hdr.cols.qtyFallback >= 0 ? parseQty(row[hdr.cols.qtyFallback]) : null;
-        let qty = itemQty;
-        if (qty === null) qty = quantity;
+        // "Quantity" (e.g. "1 Each") is the as-released quantity; "Item
+        // Qty"/"Item Quantity" is only a fallback when "Quantity" is absent.
+        let qty = quantity;
+        if (qty === null) qty = itemQty;
         rows.push({
           number: number,
           title: hdr.cols.title >= 0 ? cellText(row[hdr.cols.title]) : '',
@@ -198,6 +226,8 @@
         hasEntityIcon: hdr.cols.entityIcon >= 0,
         hasMaterial: hdr.cols.material >= 0,
         hasRevision: hdr.cols.revision >= 0,
+        hasItemQty: hdr.cols.qty >= 0,
+        hasQuantity: hdr.cols.qtyFallback >= 0,
         projectKey: extractProjectKey(rootRow),
         columns: hdr.cols,
         warnings: warnings,
