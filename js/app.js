@@ -22,6 +22,7 @@
     lldbo: null,         // parsed LLDBO result (+ fileName), optional
     lldboResult: null,   // js/lldbo-compare.js compareLldbo() result
     materialResult: null, // js/material-compare.js compareMaterial() result
+    revisionResult: null, // js/revision-compare.js compareRevision() result
   };
 
   // Base name suffix from the Item Master's SPN/PN project key, e.g.
@@ -45,6 +46,7 @@
     if (idx >= 0) state.cadSources.splice(idx, 1, parsed);
     else state.cadSources.push(parsed);
     runMaterialCheck();
+    runRevisionCheck();
   }
 
   /* ---------------- column visibility ---------------- */
@@ -142,6 +144,7 @@
         renderCadSources('', '');
         updateCompareButton();
         runMaterialCheck();
+        runRevisionCheck();
       });
       row.appendChild(rm);
       box.appendChild(row);
@@ -164,6 +167,7 @@
       chips.push({ text: 'Item Master', kind: 'good' });
       chips.push({ text: parsed.rows.length + ' rows' });
       chips.push({ text: parsed.hasPaths ? 'hierarchy ✓' : 'no hierarchy', kind: parsed.hasPaths ? '' : 'warn' });
+      if (parsed.hasRevision) chips.push({ text: 'revision ✓', kind: 'good' });
     } else {
       let srcLabel = { 'flat-xlsx': 'Vault flat export', 'pdf': 'Vault PDF (full structure)', 'leveled-sheet': 'Leveled table' }[parsed.source] || parsed.source;
       if (parsed.source === 'leveled-sheet' && parsed.hasStructure) srcLabel = 'Inventor BOM export';
@@ -172,6 +176,7 @@
       chips.push({ text: parsed.hasQty ? 'quantities ✓' : 'no quantities', kind: parsed.hasQty ? '' : 'warn' });
       chips.push({ text: parsed.hasLevels ? 'levels ✓' : 'no levels', kind: parsed.hasLevels ? '' : 'warn' });
       if (parsed.hasMaterial) chips.push({ text: 'material ✓', kind: 'good' });
+      if (parsed.hasRevision) chips.push({ text: 'revision ✓', kind: 'good' });
     }
     if (parsed.warnings && parsed.warnings.length) {
       chips.push({ text: parsed.warnings.length + ' note(s)', kind: 'warn', title: parsed.warnings.join('\n') });
@@ -208,7 +213,7 @@
         }
       } catch (e) {
         if (role === 'cad') renderCadSources('', file.name + ': ' + (e.message || String(e)));
-        else { state.im = null; state.imQc = null; hideImQc(); setImStatus(file.name, [], e.message || String(e)); runMaterialCheck(); }
+        else { state.im = null; state.imQc = null; hideImQc(); setImStatus(file.name, [], e.message || String(e)); runMaterialCheck(); runRevisionCheck(); }
       }
     }
     updateCompareButton();
@@ -234,6 +239,7 @@
     renderImQc();
     if (state.lldbo) runLldboCheck();
     runMaterialCheck();
+    runRevisionCheck();
   }
 
   function handleCadWorkbook(file, wb) {
@@ -494,6 +500,10 @@
     { key: 'c6', title: 'Material Completeness',
       desc: 'Every non-assembly row should have a Material. Assemblies/weldments are excluded (they legitimately carry no material of their own).',
       cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat([['title', 'Title']]) },
+    { key: 'c7', title: 'Revision Consistency',
+      desc: 'The same part number used at more than one BOM position should carry the same Revision everywhere it appears.',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
+        [['revision', 'Revision'], ['conflictsWith', 'Also Recorded As']]) },
   ];
 
   function hideImQc() {
@@ -504,10 +514,25 @@
     $('qc-callout').textContent = '';
   }
 
-  function qcCardFor(check, result) {
-    const cls = !result.applicable ? 'na' : (result.fail.length ? 'fail' : 'pass');
-    const num = !result.applicable ? 'N/A' : (result.fail.length ? String(result.fail.length) : 'PASS');
-    const sub = !result.applicable ? result.reason : (result.fail.length ? 'flagged' : 'clean');
+  // A check can PASS on its own terms (e.g. every part has a Material
+  // value) while a related cross-source comparison still finds a real
+  // problem (e.g. that value doesn't match the CAD model) — surfacing that
+  // as plain green would hide it. Returns a short message to show instead
+  // of "clean" when that's the case, or null when there's nothing to add.
+  function relatedWarningFor(check) {
+    if (check.key === 'c6' && state.materialResult && state.materialResult.applicable && state.materialResult.mismatches.length) {
+      return state.materialResult.mismatches.length + ' material mismatch(es) vs CAD — see the Material vs CAD section below';
+    }
+    if (check.key === 'c7' && state.revisionResult && state.revisionResult.applicable && state.revisionResult.mismatches.length) {
+      return state.revisionResult.mismatches.length + ' revision mismatch(es) vs CAD — see the Revision vs CAD section below';
+    }
+    return null;
+  }
+
+  function qcCardFor(check, result, warnMsg) {
+    const cls = !result.applicable ? 'na' : (result.fail.length ? 'red' : (warnMsg ? 'amber' : 'pass'));
+    const num = !result.applicable ? 'N/A' : (result.fail.length ? String(result.fail.length) : (warnMsg ? '⚠' : 'PASS'));
+    const sub = !result.applicable ? result.reason : (result.fail.length ? 'flagged' : (warnMsg || 'clean'));
     const el = document.createElement('div');
     el.className = 'card ' + cls;
     el.innerHTML = '<div class="num"></div><div class="lbl"></div>';
@@ -516,7 +541,7 @@
     return el;
   }
 
-  function qcSectionFor(check, result) {
+  function qcSectionFor(check, result, warnMsg) {
     const box = document.createElement('div');
     box.className = 'qc-section';
     const head = document.createElement('div');
@@ -527,8 +552,8 @@
     titleBox.querySelector('.qc-section-desc').textContent = check.desc;
     head.appendChild(titleBox);
     const pill = document.createElement('span');
-    pill.className = 'qc-pill ' + (!result.applicable ? 'na' : (result.fail.length ? 'fail' : 'pass'));
-    pill.textContent = !result.applicable ? 'N/A' : (result.fail.length ? result.fail.length + ' FLAGGED' : 'OK');
+    pill.className = 'qc-pill ' + (!result.applicable ? 'na' : (result.fail.length ? 'fail' : (warnMsg ? 'warn' : 'pass')));
+    pill.textContent = !result.applicable ? 'N/A' : (result.fail.length ? result.fail.length + ' FLAGGED' : (warnMsg ? 'OK, BUT SEE BELOW' : 'OK'));
     head.appendChild(pill);
     box.appendChild(head);
 
@@ -537,7 +562,7 @@
     if (!result.applicable) {
       body.innerHTML = '<div class="empty-state">' + result.reason + '</div>';
     } else if (!result.fail.length) {
-      body.innerHTML = '<div class="empty-state">✓ No issues found' + (check.key === 'c1' && result.applicableCount ? ' across ' + result.applicableCount + ' applicable row(s)' : '') + '.</div>';
+      body.innerHTML = '<div class="empty-state">' + (warnMsg ? '⚠ ' + warnMsg : '✓ No issues found' + (check.key === 'c1' && result.applicableCount ? ' across ' + result.applicableCount + ' applicable row(s)' : '') + '.') + '</div>';
     } else {
       const table = document.createElement('table');
       table.className = 'results-table';
@@ -568,8 +593,9 @@
     sections.innerHTML = '';
     for (const check of QC_CHECKS) {
       const result = qc[check.key];
-      summary.appendChild(qcCardFor(check, result));
-      sections.appendChild(qcSectionFor(check, result));
+      const warnMsg = result.applicable && !result.fail.length ? relatedWarningFor(check) : null;
+      summary.appendChild(qcCardFor(check, result, warnMsg));
+      sections.appendChild(qcSectionFor(check, result, warnMsg));
     }
 
     const callout = $('qc-callout');
@@ -580,8 +606,11 @@
     if (qc.c6.applicable && qc.c6.fail.length) {
       bits.push(qc.c6.fail.length + ' part(s) need Material populated');
     }
+    if (qc.c7.applicable && qc.c7.fail.length) {
+      bits.push(qc.c7.fail.length + ' row(s) have a Revision that conflicts with another occurrence of the same part');
+    }
     if (bits.length) {
-      callout.textContent = '⚠ ' + bits.join(' · ') + ' — see below, or download the QC report for a highlighted copy of the Item Master.';
+      callout.textContent = '⚠ ' + bits.join(' · ') + ' — see below, or download the QC report.';
       callout.classList.remove('hidden');
     } else {
       callout.textContent = '';
@@ -611,6 +640,9 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
     if (state.materialResult) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(materialSheetRows(state.materialResult)), 'Material vs CAD');
+    }
+    if (state.revisionResult) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(revisionSheetRows(state.revisionResult)), 'Revision vs CAD');
     }
     XLSX.writeFile(wb, 'ItemMaster-QC-report' + projectKeySuffix() + '.xlsx');
   });
@@ -766,6 +798,7 @@
     if (!state.im) { state.materialResult = null; hideMaterialResults(); return; }
     state.materialResult = BC.materialCompare.compareMaterial(state.cadSources, state.im);
     renderMaterialPanel();
+    if (state.imQc) renderImQc(); // Check 6's card reflects state.materialResult too — see relatedWarningFor()
   }
 
   const MATERIAL_MISMATCH_COLS = [['number', 'Part Number'], ['title', 'Title']].concat(LOCATION_COLS).concat(
@@ -879,6 +912,67 @@
     return rows;
   }
 
+  /* ---------------- revision: CAD vs Item Master ---------------- */
+
+  function hideRevisionResults() {
+    $('revision-sections').innerHTML = '';
+  }
+
+  function runRevisionCheck() {
+    if (!state.im) { state.revisionResult = null; hideRevisionResults(); return; }
+    state.revisionResult = BC.revisionCompare.compareRevision(state.cadSources, state.im);
+    renderRevisionPanel();
+    renderResults(); // the main summary row's Revision mismatches card depends on this
+    if (state.imQc) renderImQc(); // Check 7's card reflects state.revisionResult too — see relatedWarningFor()
+  }
+
+  const REVISION_MISMATCH_COLS = [['number', 'Part Number'], ['title', 'Title']].concat(LOCATION_COLS).concat(
+    [['imRevision', 'Item Master Revision'], ['cadRevision', 'CAD Revision']]);
+
+  function renderRevisionPanel() {
+    const res = state.revisionResult;
+    const sections = $('revision-sections');
+    sections.innerHTML = '';
+    if (!res) return;
+
+    if (res.applicable) {
+      sections.appendChild(lldboSectionFor(
+        'Revision: CAD vs Item Master',
+        'Compares CAD revision (' + (res.cadSourceFileName ? '"' + res.cadSourceFileName + '"' : 'the loaded CAD source') +
+          ') against the Item Master, for every shared part. Revision values are compared directly (not normalized) — any difference is a genuine finding.',
+        REVISION_MISMATCH_COLS, res.mismatches,
+        '✓ CAD and Item Master revisions agree for every shared part.'
+      ));
+    } else {
+      const note = document.createElement('div');
+      note.className = 'qc-section';
+      const head = document.createElement('div');
+      head.className = 'qc-section-head';
+      head.innerHTML = '<div class="qc-section-title">Revision: CAD vs Item Master</div><span class="qc-pill na">N/A</span>';
+      note.appendChild(head);
+      const body = document.createElement('div');
+      body.className = 'qc-section-body open';
+      body.innerHTML = '<div class="empty-state">' + res.reason + '</div>';
+      note.appendChild(body);
+      sections.appendChild(note);
+    }
+  }
+
+  function revisionSheetRows(res) {
+    const rows = [['Revision: CAD vs Item Master', '']];
+    if (!res.applicable) {
+      rows.push(['N/A', res.reason]);
+    } else {
+      rows.push(['Mismatches', res.mismatches.length]);
+      if (res.mismatches.length) {
+        rows.push([]);
+        rows.push(REVISION_MISMATCH_COLS.map(function (c) { return c[1]; }));
+        for (const m of res.mismatches) rows.push(REVISION_MISMATCH_COLS.map(function (c) { return m[c[0]]; }));
+      }
+    }
+    return rows;
+  }
+
   /* ---------------- compare & render ---------------- */
 
   function updateCompareButton() {
@@ -944,6 +1038,12 @@
       { num: res.qtyMismatches === null ? '—' : res.qtyMismatches.length, lbl: 'quantity mismatches', cls: res.qtyMismatches && res.qtyMismatches.length ? 'amber' : '' },
       { num: res.imOnly.length, lbl: 'in Item Master only' },
     ];
+    const rev = state.revisionResult;
+    cards.splice(5, 0, {
+      num: rev && rev.applicable ? rev.mismatches.length : '—',
+      lbl: 'revision mismatches',
+      cls: rev && rev.applicable && rev.mismatches.length ? 'amber' : '',
+    });
     if (res.referenceRoots !== null) {
       cards.splice(4, 0, { num: res.referenceTotal, lbl: 'reference components in CAD' });
     }
@@ -1430,6 +1530,10 @@
 
     if (state.materialResult) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(materialSheetRows(state.materialResult)), 'Material vs CAD');
+    }
+
+    if (state.revisionResult) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(revisionSheetRows(state.revisionResult)), 'Revision vs CAD');
     }
 
     if (state.lldboResult) {

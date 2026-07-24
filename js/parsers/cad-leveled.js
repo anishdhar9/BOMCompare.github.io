@@ -12,8 +12,8 @@
  *   2. a dotted item/position column ('1.2.3' -> level 3)
  *   3. row indentation (leading spaces, or x-offsets supplied by pdf-extract)
  *
- * Produces: { kind:'cad', source, hasQty, hasLevels, items:[...], columns,
- *             headerRow, warnings }
+ * Produces: { kind:'cad', source, hasQty, hasLevels, hasMaterial, hasRevision,
+ *             items:[...], columns, headerRow, warnings }
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
@@ -46,6 +46,7 @@
     description: ['description', 'beschreibung'],
     file: ['file', 'file name', 'filename', 'dateiname', 'document'],
     material: ['material', 'werkstoff'],
+    revision: ['revision', 'rev', 'rev.'],
   };
 
   function matchField(headerText) {
@@ -147,7 +148,8 @@
     };
     const cNumber = col('number'), cQty = col('qty'), cLevel = col('level'),
           cPos = col('pos'), cTitle = col('title'), cDesc = col('description'),
-          cFile = col('file'), cStructure = col('structure'), cMaterial = col('material');
+          cFile = col('file'), cStructure = col('structure'), cMaterial = col('material'),
+          cRevision = col('revision');
 
     const items = [];
     const rawIndents = [];
@@ -189,6 +191,7 @@
         isAssembly: null, // resolved below
         file: cFile >= 0 ? cellText(row[cFile]) : '',
         material: cMaterial >= 0 ? cellText(row[cMaterial]) : '',
+        revision: cRevision >= 0 ? cellText(row[cRevision]) : '',
         bomStructure: bomStructure,
         isReference: /reference/i.test(bomStructure),
         sourceRow: r + 1,
@@ -228,6 +231,7 @@
     if (!hasQty) warnings.push('No usable quantity column — quantity comparison unavailable for this file.');
     if (!hasLevels) warnings.push('No level/position information found — reference-assembly grouping will be inferred from the Item Master hierarchy.');
     const hasMaterial = cMaterial >= 0 && items.some(function (it) { return it.material !== ''; });
+    const hasRevision = cRevision >= 0 && items.some(function (it) { return it.revision !== ''; });
 
     return {
       kind: 'cad',
@@ -236,6 +240,7 @@
       hasLevels: hasLevels,
       hasStructure: cStructure >= 0,
       hasMaterial: hasMaterial,
+      hasRevision: hasRevision,
       items: items,
       columns: cols,
       headerRow: headerRow,
