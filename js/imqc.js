@@ -10,7 +10,7 @@
  * (Entity Icon) isn't present in a given export, rather than flagging every
  * row as failing.
  *
- * Produces: { c1, c2, c3, c4, c5, c6 }, each either
+ * Produces: { c1, c2, c3, c4, c5, c6, c7 }, each either
  *   { applicable: true, fail: [...] }  or
  *   { applicable: false, reason: string }
  */
@@ -264,6 +264,50 @@
     return out;
   }
 
+  // Check 7: Revision Consistency. The same part number can legitimately
+  // appear at multiple BOM positions (used in more than one assembly); when
+  // it does, every occurrence should carry the same Revision value. A
+  // mismatch usually means one assembly's occurrence was updated to a newer
+  // released revision and the others weren't picked up. Values are compared
+  // directly (trimmed/uppercased) — revisions are simple codes (e.g. "0",
+  // "1", "A", "B"), not something needing a grade-equivalence lookup like
+  // material.
+  function checkRevisionConsistency(im, pathIndex) {
+    if (!im.hasRevision) {
+      return { applicable: false, reason: 'No "Revision" column found in this export.' };
+    }
+    var byPn = new Map(); // normalized PN -> [row, ...]
+    for (var i = 0; i < im.rows.length; i++) {
+      var row = im.rows[i];
+      var key = String(row.number).trim().toUpperCase();
+      if (!key) continue;
+      if (!byPn.has(key)) byPn.set(key, []);
+      byPn.get(key).push(row);
+    }
+    var fail = [];
+    byPn.forEach(function (rows) {
+      if (rows.length < 2) return;
+      var distinct = new Set();
+      rows.forEach(function (r) {
+        var rv = (r.revision || '').trim().toUpperCase();
+        if (rv) distinct.add(rv);
+      });
+      if (distinct.size < 2) return; // all occurrences agree (or too few have a value to compare)
+      rows.forEach(function (row2) {
+        var others = rows.filter(function (x) { return x !== row2; })
+          .map(function (x) { return (x.revision || '(blank)') + ' at Row Order ' + (rowOrderText(x) || '-'); })
+          .join('; ');
+        fail.push(withLocation({
+          number: row2.number,
+          rowOrder: rowOrderText(row2) || '-',
+          revision: row2.revision || '(blank)',
+          conflictsWith: others,
+        }, pathIndex, row2));
+      });
+    });
+    return { applicable: true, fail: fail };
+  }
+
   function runChecks(im) {
     var pathIndex = buildPathIndex(im.rows);
     return {
@@ -273,6 +317,7 @@
       c4: checkEntityIcon(im, pathIndex),
       c5: checkTitleDescription(im, pathIndex),
       c6: checkMaterial(im, pathIndex),
+      c7: checkRevisionConsistency(im, pathIndex),
       total: im.rows.length,
     };
   }

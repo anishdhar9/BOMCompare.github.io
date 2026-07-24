@@ -1,13 +1,15 @@
 /*
  * itemmaster.js — parser for the Vault "Item Master BOM" Excel export
  * (.xls or .xlsx). The export's visible columns are user-configurable in
- * Vault, so columns are located by header name; only 'Number' is mandatory.
+ * Vault, so columns are located by header keyword rather than position —
+ * only 'Number' (or an equivalent synonym) is mandatory.
  *
  * Produces: { kind:'itemmaster', rows:[{number,title,description,qty,
  *             itemQty,quantity,quantityText,producer,producerNumber,
- *             entityIcon,material,path,rowType,sourceRow}], hasPaths,
- *             hasEntityIcon, hasProducer, hasMaterial,
- *             projectKey:{spn,pn}|null, sheetName, columns, warnings }
+ *             entityIcon,material,revision,path,rowType,sourceRow}],
+ *             hasPaths, hasEntityIcon, hasProducer, hasMaterial,
+ *             hasRevision, projectKey:{spn,pn}|null, sheetName, columns,
+ *             warnings }
  *
  * `qty` is the resolved quantity used by compare.js's roll-up (Item Qty
  * preferred, Quantity as fallback). `itemQty`/`quantity` are kept separate
@@ -42,36 +44,76 @@
     return s.split('.').map(function (p) { return p.trim(); });
   }
 
+  // Column sets vary across organizations' (and even the same organization's
+  // different plants'/users') Vault exports -- e.g. "Part Number" or "Item
+  // Number" instead of "Number" -- so columns are located by keyword rather
+  // than a single exact header string, mirroring cad-leveled.js's
+  // FIELD_KEYWORDS/matchField pattern.
+  //
+  // Deliberately does NOT include "PN" as a Number synonym: in this
+  // organization's convention "PN" means Producer Number (the numeric half
+  // of the project's SPN/PN key, e.g. "PN22426" -- see extractProjectKey()
+  // below), never a part number. "PN" is instead a producerNumber synonym.
+  const FIELD_KEYWORDS = {
+    number: ['number', 'part number', 'item number'],
+    qty: ['item qty', 'qty', 'qty.'],
+    qtyFallback: ['quantity'],
+    path: ['row order', 'level', 'position', 'bom level'],
+    title: ['title', 'name'],
+    description: ['description', 'desc'],
+    rowType: ['row type', 'type'],
+    producer: ['producer'],
+    producerNumber: ['producer number', 'pn'],
+    entityIcon: ['entity icon', 'icon'],
+    material: ['material'],
+    revision: ['revision', 'rev'],
+    // recognized only so it counts toward the header-row marker check below;
+    // not a field this parser captures into row data.
+    marker: ['category name'],
+  };
+
+  function matchField(headerText) {
+    const h = headerText.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!h) return null;
+    for (const field of Object.keys(FIELD_KEYWORDS)) {
+      if (FIELD_KEYWORDS[field].indexOf(h) !== -1) return field;
+    }
+    // prefix matches for compound headers like 'Title (Item,CO)'
+    for (const field of Object.keys(FIELD_KEYWORDS)) {
+      for (const kw of FIELD_KEYWORDS[field]) {
+        if (kw.length >= 3 && h.indexOf(kw) === 0) return field;
+      }
+    }
+    return null;
+  }
+
   function findHeader(aoa) {
     for (let r = 0; r < Math.min(aoa.length, 15); r++) {
       const row = aoa[r] || [];
-      const lower = row.map(function (c) { return cellText(c).toLowerCase(); });
-      const numberCol = lower.indexOf('number');
-      if (numberCol === -1) continue;
-      // require one more Item-Master-ish header to avoid false positives
-      const marker = lower.some(function (h) {
-        return h === 'row order' || h === 'item qty' || h === 'quantity' ||
-               h === 'row type' || h.indexOf('title') === 0 || h === 'category name';
-      });
-      if (!marker) continue;
-      const find = function (pred) {
-        for (let i = 0; i < lower.length; i++) if (pred(lower[i])) return i;
-        return -1;
-      };
+      const cols = {};
+      let score = 0;
+      for (let c = 0; c < row.length; c++) {
+        const f = matchField(cellText(row[c]));
+        if (f && cols[f] === undefined) { cols[f] = c; score++; }
+      }
+      if (cols.number === undefined) continue;
+      if (score < 2) continue; // require one more Item-Master-ish header to avoid false positives
+      const at = function (field) { return cols[field] !== undefined ? cols[field] : -1; };
       return {
         headerRow: r,
         cols: {
-          number: numberCol,
-          qty: find(function (h) { return h === 'item qty'; }),
-          qtyFallback: find(function (h) { return h === 'quantity'; }),
-          path: find(function (h) { return h === 'row order'; }),
-          title: find(function (h) { return h.indexOf('title') === 0; }),
-          description: find(function (h) { return h.indexOf('description') === 0; }),
-          rowType: find(function (h) { return h === 'row type'; }),
-          producer: find(function (h) { return h === 'producer'; }),
-          producerNumber: find(function (h) { return h === 'producer number'; }),
-          entityIcon: find(function (h) { return h === 'entity icon'; }),
-          material: find(function (h) { return h === 'material'; }),
+          number: cols.number,
+          qty: at('qty'),
+          qtyFallback: at('qtyFallback'),
+          path: at('path'),
+          title: at('title'),
+          description: at('description'),
+          rowType: at('rowType'),
+          producer: at('producer'),
+          producerNumber: at('producerNumber'),
+          entityIcon: at('entityIcon'),
+          material: at('material'),
+          revision: at('revision'),
         },
       };
     }
@@ -133,6 +175,7 @@
           producerNumber: hdr.cols.producerNumber >= 0 ? cellText(row[hdr.cols.producerNumber]) : '',
           entityIcon: hdr.cols.entityIcon >= 0 ? cellText(row[hdr.cols.entityIcon]) : '',
           material: hdr.cols.material >= 0 ? cellText(row[hdr.cols.material]) : '',
+          revision: hdr.cols.revision >= 0 ? cellText(row[hdr.cols.revision]) : '',
           path: hdr.cols.path >= 0 ? parsePath(row[hdr.cols.path]) : null,
           rowType: hdr.cols.rowType >= 0 ? cellText(row[hdr.cols.rowType]) : '',
           sourceRow: r + 1,
@@ -154,6 +197,7 @@
         hasProducer: hdr.cols.producer >= 0 || hdr.cols.producerNumber >= 0,
         hasEntityIcon: hdr.cols.entityIcon >= 0,
         hasMaterial: hdr.cols.material >= 0,
+        hasRevision: hdr.cols.revision >= 0,
         projectKey: extractProjectKey(rootRow),
         columns: hdr.cols,
         warnings: warnings,

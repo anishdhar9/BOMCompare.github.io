@@ -25,6 +25,7 @@ const { cadLeveledParser } = require(path.join(rootDir, 'js/parsers/cad-leveled.
 const { detect } = require(path.join(rootDir, 'js/parsers/detect.js'));
 const { imQc } = require(path.join(rootDir, 'js/imqc.js'));
 const { materialCompare } = require(path.join(rootDir, 'js/material-compare.js'));
+const { revisionCompare } = require(path.join(rootDir, 'js/revision-compare.js'));
 const { folder } = require(path.join(rootDir, 'js/folder.js'));
 const { lldboParser } = require(path.join(rootDir, 'js/parsers/lldbo.js'));
 const { lldboCompare } = require(path.join(rootDir, 'js/lldbo-compare.js'));
@@ -131,6 +132,49 @@ console.log('\n== synthetic: leveled CAD parsing captures Material column ==');
     cadLeveledParser.parse([['Number', 'Werkstoff'], ['PART-A', 'AISI 316']], { source: 'leveled-sheet' }).hasMaterial === true);
 }
 
+console.log('\n== synthetic: leveled CAD parsing captures Revision column ==');
+{
+  const aoaWithRev = [
+    ['Item', 'Part Number', 'QTY', 'Description', 'Revision'],
+    ['1', 'PART-A', '1', 'desc', '2'],
+    ['1.1', 'PART-B', '2', 'desc', ''],
+  ];
+  const cadWithRev = cadLeveledParser.parse(aoaWithRev, { source: 'leveled-sheet' });
+  check('revision column detected', cadWithRev.hasRevision === true, cadWithRev.hasRevision);
+  check('revision value captured per item', cadWithRev.items[0].revision === '2', cadWithRev.items[0].revision);
+  check('blank revision stays empty string, not null', cadWithRev.items[1].revision === '', cadWithRev.items[1].revision);
+
+  const cadNoRev = cadLeveledParser.parse([['Item', 'Part Number', 'QTY'], ['1', 'PART-A', '1']], { source: 'leveled-sheet' });
+  check('hasRevision false when no Revision column exists', cadNoRev.hasRevision === false, cadNoRev.hasRevision);
+  check('"Rev" recognized as a revision header',
+    cadLeveledParser.parse([['Number', 'Rev'], ['PART-A', 'B']], { source: 'leveled-sheet' }).hasRevision === true);
+
+  // this is the same grid shape pdf-extract.js hands to cad-leveled.js after
+  // reconstructing the Vault "Uses" PDF table (see js/parsers/pdf-extract.js's
+  // HEADER_KEYS) -- confirms a PDF-sourced Revision column flows through.
+  const pdfLikeGrid = [
+    ['File', 'Revision', 'State', 'Title', 'Description', 'Part Number'],
+    ['mach.iam', '1', 'Released', 'Machine', 'desc', 'MACH-01'],
+  ];
+  const fromPdfGrid = cadLeveledParser.parse(pdfLikeGrid, { source: 'pdf' });
+  check('Revision column from a PDF-shaped grid is captured', fromPdfGrid.hasRevision === true && fromPdfGrid.items[0].revision === '1',
+    fromPdfGrid.items[0]);
+}
+
+console.log('\n== synthetic: flat Vault Excel paste (cad-flat-xlsx.js) captures Revision + Material ==');
+{
+  const aoa = [
+    ['Part X title', 'Part X desc', true, 'Released', 'partx.ipt', '2', 'Steel', 'PART-X'],
+    ['Part Y title', 'Part Y desc', true, 'Released', 'party.ipt', '', 'Aluminum', 'PART-Y'],
+    ['Assy Z title', 'Assy Z desc', true, 'Released', 'assyz.iam', '0', '', 'ASSY-Z'],
+  ];
+  const res = cadFlatParser.parse({ SheetNames: ['Sheet1'], Sheets: { Sheet1: {} } }, { utils: { sheet_to_json: () => aoa } });
+  check('flat-xlsx parsed', !!res, res);
+  check('flat-xlsx hasRevision true', res.hasRevision === true, res.hasRevision);
+  check('flat-xlsx revision captured per item', res.items[0].revision === '2' && res.items[0].material === 'Steel', res.items[0]);
+  check('flat-xlsx blank revision stays empty string', res.items[1].revision === '', res.items[1].revision);
+}
+
 console.log('\n== synthetic: IM quantity roll-up through ancestors ==');
 {
   const im = {
@@ -184,6 +228,66 @@ console.log('\n== synthetic: Vault PDF table reconstruction ==');
   check('PDF CAD parses rows', cad && cad.items.length === 3, cad && cad.items.map(i => i.number));
   check('PDF Name column becomes file column', cad.items[0].file === '7-230-20509.iam' && cad.items[0].isAssembly === true, cad.items[0]);
   check('PDF indentation infers levels', cad.hasLevels === true && cad.items.map(i => i.level).join(',') === '1,2,3', cad && cad.items.map(i => i.level));
+}
+
+console.log('\n== synthetic: Item Master column-name robustness (itemmaster.js) ==');
+{
+  // Different organizations' (or the same organization's different
+  // plants'/users') Vault exports don't all spell headers the same way, or
+  // put them in the same order. This block proves both: header synonyms are
+  // recognized, and column ORDER doesn't matter (it never did -- this parser
+  // is header-name-based -- but there was no dedicated test proving it).
+  const synonymAoa = [
+    ['Row Order', 'Part Number', 'Description (Item,CO)', 'Title (Item,CO)', 'Qty'],
+    ['-', 'MACH-01', 'desc', 'Machine', '-'],
+    ['1', 'PART-A', 'desc', 'Part A', '3'],
+  ];
+  const imSyn = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => synonymAoa } });
+  check('"Part Number" recognized as the Number column', !!imSyn && imSyn.rows[1].number === 'PART-A', imSyn && imSyn.rows);
+  check('"Qty" recognized as the Item Qty column (numeric slot)', imSyn && imSyn.rows[1].itemQty === 3, imSyn && imSyn.rows[1]);
+  check('columns in a shuffled, non-canonical order still parse (Row Order first, Number second)',
+    imSyn && imSyn.hasPaths === true && imSyn.rows[1].path.join('.') === '1', imSyn && imSyn.rows[1]);
+
+  // Critical negative test: "PN" must NOT be treated as a Number synonym --
+  // in this organization's convention "PN" means Producer Number (part of
+  // the project's SPN/PN key), never a part number.
+  const pnAoa = [
+    ['PN', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)'],
+    ['MACH-01', '-', 'Machine', 'desc'],
+  ];
+  const imPn = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => pnAoa } });
+  check('a bare "PN" header does NOT get picked up as the Number column (no header row found at all here)', imPn === null, imPn);
+
+  // "PN" as its own column DOES mean Producer Number when Number is also present.
+  const producerNumberAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Producer', 'PN'],
+    ['MACH-01', '-', 'Machine', 'PN22426_SPN016823_ACME', 'SPN016823', '22426'],
+  ];
+  const imProdNum = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => producerNumberAoa } });
+  check('"PN" recognized as the Producer Number column (not Number)',
+    imProdNum && imProdNum.rows[0].number === 'MACH-01' && imProdNum.rows[0].producerNumber === '22426', imProdNum && imProdNum.rows[0]);
+  check('projectKey still resolves correctly with PN-as-header', imProdNum && imProdNum.projectKey &&
+    imProdNum.projectKey.spn === 'SPN016823' && imProdNum.projectKey.pn === 'PN22426', imProdNum && imProdNum.projectKey);
+
+  // "Level"/"Position" as Row Order synonyms, "Item Number" as a Number synonym.
+  const levelAoa = [
+    ['Item Number', 'Level', 'Title (Item,CO)', 'Description (Item,CO)'],
+    ['MACH-01', '-', 'Machine', 'desc'],
+    ['PART-A', '1', 'Part A', 'desc'],
+  ];
+  const imLevel = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => levelAoa } });
+  check('"Item Number" recognized as the Number column and "Level" as Row Order',
+    imLevel && imLevel.rows[1].number === 'PART-A' && imLevel.hasPaths === true, imLevel && imLevel.rows);
+
+  // Revision column + hasRevision flag.
+  const revAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Revision'],
+    ['MACH-01', '-', 'Machine', 'desc', '1'],
+  ];
+  const imRev = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => revAoa } });
+  check('Item Master Revision column captured', imRev && imRev.hasRevision === true && imRev.rows[0].revision === '1', imRev && imRev.rows[0]);
+  const imNoRev = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => revAoa.map(r => r.slice(0, 4)) } });
+  check('hasRevision false when no Revision column exists', imNoRev && imNoRev.hasRevision === false, imNoRev && imNoRev.hasRevision);
 }
 
 /* ---------------- synthetic: dual-source reference detection ---------------- */
@@ -334,6 +438,64 @@ console.log('\n== synthetic: Title/Description completeness (c5) + Material comp
   check('no Material column -> hasMaterial false', noMatIm.hasMaterial === false);
   const noMatQc = imQc.runChecks(noMatIm);
   check('c6 not-applicable without Material column (not mass-fail)', noMatQc.c6.applicable === false, noMatQc.c6);
+}
+
+console.log('\n== synthetic: Revision Consistency (c7) + Revision: CAD vs Item Master ==');
+{
+  const aoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Revision'],
+    ['MACH-01', '-', 'Machine', 'desc', '2'],
+    ['ASSY-A', '1', 'Assy A', 'desc', '1'],
+    ['PART-X', '1.1', 'Part X', 'desc', '0'],
+    ['ASSY-B', '2', 'Assy B', 'desc', '1'],
+    ['PART-X', '2.1', 'Part X', 'desc', '1'],   // same PN as above, conflicting revision
+    ['PART-Y', '1.2', 'Part Y', 'desc', '3'],
+    ['PART-Y', '2.2', 'Part Y', 'desc', '3'],   // same PN, same revision -> not flagged
+    ['PART-Z', '1.3', 'Part Z', 'desc', ''],    // blank revision, no other occurrence -> not flagged
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, { utils: { sheet_to_json: () => aoa } });
+  check('IM parsed with Revision column', im.hasRevision === true);
+  const qc = imQc.runChecks(im);
+
+  check('c7 flags exactly 2 rows (both PART-X occurrences)', qc.c7.applicable === true && qc.c7.fail.length === 2,
+    qc.c7.fail.map(f => f.rowOrder));
+  check('c7: both PART-X occurrences flagged, PART-Y (same revision) is not',
+    qc.c7.fail.every(f => f.number === 'PART-X') && !qc.c7.fail.some(f => f.number === 'PART-Y'), qc.c7.fail);
+  check('c7: PART-Z (single occurrence, blank revision) is not flagged',
+    !qc.c7.fail.some(f => f.number === 'PART-Z'));
+  check('c7 fail entries carry Row #, parent, and a conflictsWith summary',
+    qc.c7.fail.every(f => f.sourceRow > 1 && f.parentNumber && f.conflictsWith), qc.c7.fail);
+
+  const noRevAoa = aoa.map(r => r.slice(0, 4));
+  const noRevIm = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, { utils: { sheet_to_json: () => noRevAoa } });
+  check('c7 not-applicable without Revision column (not mass-fail)', imQc.runChecks(noRevIm).c7.applicable === false);
+
+  // CAD vs Item Master revision comparison (js/revision-compare.js)
+  const cadSource = {
+    kind: 'cad', hasRevision: true,
+    fileName: 'inventor.xlsx',
+    items: [
+      { number: 'ASSY-A', revision: '1' },   // matches IM
+      { number: 'ASSY-B', revision: '1' },   // matches IM
+      { number: 'PART-Y', revision: '9' },   // genuinely differs from IM's '3'
+    ],
+  };
+  const rev = revisionCompare.compareRevision([cadSource], im);
+  check('revision check applicable with a hasRevision CAD source', rev.applicable === true, rev);
+  check('revision mismatch found for PART-Y only (ASSY-A and ASSY-B agree with CAD)',
+    rev.mismatches.length === 1 && rev.mismatches[0].number === 'PART-Y', rev.mismatches);
+  check('revision mismatch entry carries Row #, parent, and both revision values',
+    rev.mismatches[0].sourceRow > 1 && rev.mismatches[0].parentNumber &&
+    rev.mismatches[0].imRevision === '3' && rev.mismatches[0].cadRevision === '9', rev.mismatches[0]);
+
+  check('revision check not-applicable without a hasRevision CAD source',
+    revisionCompare.compareRevision([{ kind: 'cad', hasRevision: false, items: [] }], im).applicable === false);
+  check('revision check not-applicable without an Item Master Revision column',
+    revisionCompare.compareRevision([cadSource], noRevIm).applicable === false);
+
+  check('revisionsMatch: exact values match, case/whitespace-insensitive', revisionCompare.revisionsMatch(' b ', 'B'));
+  check('revisionsMatch: different values do not match', !revisionCompare.revisionsMatch('A', 'B'));
+  check('revisionsMatch: blank never matches', !revisionCompare.revisionsMatch('', 'A') && !revisionCompare.revisionsMatch('A', ''));
 }
 
 console.log('\n== synthetic: folder auto-load file classification ==');
@@ -552,6 +714,10 @@ if (cadPath && imPath) {
   check('IM unique PNs = 1076', imUnique.size === 1076, imUnique.size);
   check('IM has paths', im.hasPaths === true);
   check('IM projectKey = SPN016823 / PN22426', im.projectKey && im.projectKey.spn === 'SPN016823' && im.projectKey.pn === 'PN22426', im.projectKey);
+  // Real-world confirmation: this Item Master export has no Revision column
+  // at all (verified across all three real Item Master samples this
+  // project has) -- the revision checks must degrade gracefully, not crash.
+  check('HSG Item Master has no Revision column', im.hasRevision === false, im.hasRevision);
 
   console.log('\n== real samples: HSG Item Master QC ==');
   const hsgQc = imQc.runChecks(im);
@@ -561,6 +727,7 @@ if (cadPath && imPath) {
     JSON.stringify(hsgQc.c3.fail.map(f => f.number).sort()) === JSON.stringify(['2-999-06110', '2-999-97034', '7-238-23791', '7-999-01282']),
     hsgQc.c3.fail.map(f => f.number));
   check('HSG c4 entity icon: not applicable (column absent)', hsgQc.c4.applicable === false, hsgQc.c4);
+  check('HSG c7 revision consistency: not applicable (no Revision column)', hsgQc.c7.applicable === false, hsgQc.c7);
   check('HSG c5 title/desc: 49 flagged (all description-missing on non-purchased parts)',
     hsgQc.c5.fail.length === 49 && hsgQc.c5.fail.every(f => f.kind === 'description-missing'), hsgQc.c5.fail.length);
   check('HSG c6 material: 6 non-assembly, non-purchased parts flagged (purchased parts excluded)',
@@ -606,6 +773,18 @@ if (cadPath && imPath) {
     return it && it.title === 'Bearing Housing';
   })(), cad.items.find(i => i.number === '7-236-20259'));
   check('CAD flat export has no qty', cad.hasQty === false);
+  // Real-world confirmation: the flat Vault export DOES carry Revision (a
+  // documented-but-previously-unread fixed offset — see cad-flat-xlsx.js) —
+  // real values are plain integers ("0", "1"...), not letters.
+  check('CAD flat export hasRevision true', cad.hasRevision === true, cad.hasRevision);
+  check('CAD flat export revision values are simple non-blank codes',
+    cad.items.slice(0, 20).every(it => typeof it.revision === 'string' && it.revision !== ''),
+    cad.items.slice(0, 5).map(it => it.revision));
+  // The Item Master side has no Revision column (checked above), so the
+  // cross-source comparison must degrade gracefully rather than crash.
+  const revNotApplicable = revisionCompare.compareRevision([cad], im);
+  check('revision check not-applicable on real data (Item Master has no Revision column)',
+    revNotApplicable.applicable === false, revNotApplicable);
 
   console.log('\n== real samples: comparison baseline ==');
   const res = compare(cad, im);
@@ -651,6 +830,7 @@ if (pdf723Path && imPath && cadPath) {
     const { parsed: p723 } = await parsePdf(pdf723Path);
     check('723 PDF parsed 1820 records', p723.items.length === 1820, p723.items.length);
     check('723 PDF has levels, no qty', p723.hasLevels === true && p723.hasQty === false);
+    check('723 PDF hasRevision true — the Vault "Uses" report header includes Revision', p723.hasRevision === true, p723.hasRevision);
     const badPn = p723.items.filter(i => !/^\d-\d{3}-\S+$/.test(i.number));
     check('723 PDF: every record has a clean part number', badPn.length === 0, badPn.slice(0, 3).map(i => i.number));
 

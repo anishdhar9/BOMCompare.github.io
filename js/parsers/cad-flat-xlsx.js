@@ -89,6 +89,7 @@
           isAssembly: /\.iam$/i.test(file),
           file: file,
           material: cellText(row[bi + 4]),
+          revision: cellText(row[bi + 3]),
           state: cellText(row[bi + 1]),
           sourceRow: r + 1,
         });
@@ -103,6 +104,7 @@
           hasQty: false,
           hasLevels: false,
           hasMaterial: items.some(function (it) { return it.material !== ''; }),
+          hasRevision: items.some(function (it) { return it.revision !== ''; }),
           items: items,
           warnings: warnings,
         };

@@ -90,6 +90,13 @@ The Vault/ERP item BOM grid export (`.xls`/`.xlsx`) with a `Number` header colum
 `Row Order` (dotted position paths like `2.8.1`) enables hierarchy-aware grouping and
 quantity roll-up; `Item Qty`/`Quantity` enables quantity comparison.
 
+Columns are located by header keyword, not position — different exports (different plants,
+different PLM configurations) don't all spell or order headers the same way, so common
+synonyms are recognized (e.g. "Part Number"/"Item Number" for `Number`, "Qty" for `Item Qty`,
+"Level"/"Position" for `Row Order`). One exception, deliberately: "PN" is **not** treated as a
+`Number` synonym — in this organization's convention "PN" means Producer Number (half of the
+project's SPN/PN key), never a part number.
+
 ## What the comparison does
 
 - **Match key:** part number, case-insensitive.
@@ -108,6 +115,9 @@ quantity roll-up; `Item Qty`/`Quantity` enables quantity comparison.
   (row qty × parent assembly quantities, summed over all occurrences) compared between the
   two BOMs, with a per-parent breakdown. Requires the Inventor BOM export (or any CAD
   source with a Qty column).
+- **Revision mismatches** (amber): CAD revision compared directly against the Item Master's
+  Revision for every shared part — see "Revision: CAD vs Item Master" below. Requires a
+  Revision column on both sides.
 - **In Item Master only:** items whose number never appears in the CAD BOM — stale or
   manually added entries worth reviewing.
 
@@ -132,6 +142,17 @@ different failure mode than CAD-vs-BOM drift:
    detected from the Row Order hierarchy (any row with children under it) and excluded — they
    legitimately don't carry one. Purchased/catalog parts (`X-999-…`) are excluded here too —
    see below.
+7. **Revision consistency**: the same part number, used at more than one BOM position, should
+   carry the same Revision everywhere it appears — a mismatch usually means one assembly's
+   occurrence was updated to a newer released revision and the others weren't picked up.
+   Values are compared directly (not normalized); revisions are simple codes, not something
+   needing a grade-equivalence lookup like material.
+
+A check can *pass* on its own terms while a related cross-source comparison still finds a
+real problem — e.g. every part has a Material value (check 6 passes), but one of those values
+doesn't match the CAD model (see "Material: CAD vs Item Master" below). Rather than showing
+plain green in that case, the check's card turns amber ("OK, but see below") and points at
+the section with the actual finding. Checks 6 and 7 both do this.
 
 The downloadable QC report lists every flagged row per check (with its Row # and parent
 assembly), grouped by check.
@@ -162,6 +183,18 @@ one value being a more detailed qualifier of the other) but deliberately keeps a
 L-suffix significant (`304` vs `304L`, `316` vs `316L` stay flagged as genuinely different),
 since that can be a real weldability/corrosion spec choice, not just formatting. On that same
 sample this reduces the 38 false positives to 7 real, worth-reviewing differences.
+
+### Revision: CAD vs Item Master
+
+Compares CAD revision against the Item Master's Revision for every shared part — active once
+a loaded CAD source actually carries revision data (`hasRevision`) and the Item Master itself
+has a Revision column; both are optional/user-configurable in Vault exports, the same
+situation as material. Unlike material, there's no naming-convention ambiguity to normalize
+away — verified on a real Vault "Uses" PDF export that revision values are plain integers
+("0", "1", "2"…); other organizations may use letters ("A"/"B") — so this is a direct value
+comparison (trimmed, case-insensitive), not a grade-equivalence lookup. A mismatch is shown
+both as its own row in the "Revision mismatches" summary card and in this section's detail
+table, with the same Row #/parent-assembly context as every other check.
 
 ## Long-Lead Parts (LLDBO)
 
@@ -204,6 +237,7 @@ js/parsers/lldbo.js          LLDBO (long-lead parts) list parser
 js/parsers/detect.js         format detection / role validation
 js/imqc.js                Item Master data-quality checks (no DOM)
 js/material-compare.js    material CAD-vs-IM comparison + bought-out parts (no DOM)
+js/revision-compare.js    revision CAD-vs-IM comparison (no DOM)
 js/lldbo-compare.js       LLDBO vs Item Master comparison (no DOM)
 js/folder.js              folder auto-load classification/scan (no DOM)
 js/app.js                 UI wiring
