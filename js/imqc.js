@@ -10,9 +10,11 @@
  * (Entity Icon) isn't present in a given export, rather than flagging every
  * row as failing.
  *
- * Produces: { c1, c2, c3, c4, c5, c6, c7 }, each either
+ * Produces: { c1, c2, c3, c4, c5, c6, c7, c8, c9 }, each either
  *   { applicable: true, fail: [...] }  or
  *   { applicable: false, reason: string }
+ * c9 additionally carries { errorCount, warnCount } so the UI can show amber
+ * for "not yet certified" without calling it a failure.
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
@@ -321,6 +323,87 @@
     return { applicable: true, fail: fail };
   }
 
+  // The full chain of ancestors down to `row`, from the top-level assembly
+  // inwards, as "NUMBER (Title) › NUMBER (Title) › …". parentOf() gives only
+  // the immediate parent; for a sketch part that must never have been released
+  // you need the whole path to find how it got in.
+  function ancestorTrail(pathIndex, row) {
+    if (!Array.isArray(row.path) || row.path.length === 0) return '';
+    var parts = [];
+    for (var i = 1; i < row.path.length; i++) {
+      var anc = pathIndex.get(row.path.slice(0, i).join('.'));
+      if (!anc) continue;
+      parts.push(anc.number + (anc.title ? ' (' + anc.title + ')' : ''));
+    }
+    return parts.join(' › ');
+  }
+
+  // Check 8: sketch/placeholder parts that must never reach the Item Master.
+  // 7-333-* numbers are the "rough sketch" equivalent in this organization's
+  // 3D modelling: they may exist in CAD, but only ever as REFERENCE. One
+  // reaching the released Item Master is a serious release error, so every hit
+  // is reported with its Row # and full parent trail to trace how it got in.
+  // Deliberately Item-Master-only — their presence in CAD is expected.
+  //
+  // Add further banned prefixes here if more families are ever introduced.
+  var SKETCH_PART_RE = /^7-333-/i;
+
+  function checkSketchParts(im, pathIndex) {
+    var fail = [];
+    for (var i = 0; i < im.rows.length; i++) {
+      var row = im.rows[i];
+      if (!SKETCH_PART_RE.test(String(row.number).trim())) continue;
+      fail.push(withLocation({
+        number: row.number,
+        rowOrder: rowOrderText(row) || '-',
+        title: row.title || '',
+        state: row.state || '',
+        trail: ancestorTrail(pathIndex, row) || '(top level)',
+      }, pathIndex, row));
+    }
+    return { applicable: true, fail: fail };
+  }
+
+  // Check 9: lifecycle state. A released BOM should contain Certified (or
+  // Released) items only. Obsolete / Invalid / Phased Out are hard errors —
+  // the part was released against a dead revision. "New" is a warning: it
+  // occurs in genuine released exports, so it is surfaced without being
+  // treated as a failure.
+  var BAD_STATES = ['obsolete', 'invalid', 'phased out', 'phased-out', 'phasedout'];
+  var WARN_STATES = ['new', 'work in progress', 'in work'];
+
+  function classifyState(value) {
+    var s = String(value || '').trim().toLowerCase();
+    if (!s) return 'blank';
+    for (var i = 0; i < BAD_STATES.length; i++) if (s === BAD_STATES[i] || s.indexOf(BAD_STATES[i]) === 0) return 'error';
+    for (var j = 0; j < WARN_STATES.length; j++) if (s === WARN_STATES[j] || s.indexOf(WARN_STATES[j]) === 0) return 'warn';
+    return 'ok';
+  }
+
+  function checkItemState(im, pathIndex) {
+    if (!im.hasState) {
+      return { applicable: false, reason: 'No "State" column found in this export.' };
+    }
+    var fail = [];
+    var errorCount = 0, warnCount = 0;
+    for (var i = 0; i < im.rows.length; i++) {
+      var row = im.rows[i];
+      var kind = classifyState(row.state);
+      if (kind !== 'error' && kind !== 'warn') continue;
+      if (kind === 'error') errorCount++; else warnCount++;
+      fail.push(withLocation({
+        number: row.number,
+        rowOrder: rowOrderText(row) || '-',
+        title: row.title || '',
+        state: row.state || '(blank)',
+        severity: kind === 'error' ? 'ERROR — must not be released' : 'warning — not yet certified',
+      }, pathIndex, row));
+    }
+    // Sorted so the hard errors are read first.
+    fail.sort(function (a, b) { return (a.severity < b.severity ? -1 : (a.severity > b.severity ? 1 : 0)); });
+    return { applicable: true, fail: fail, errorCount: errorCount, warnCount: warnCount };
+  }
+
   function runChecks(im) {
     var pathIndex = buildPathIndex(im.rows);
     return {
@@ -331,6 +414,8 @@
       c5: checkTitleDescription(im, pathIndex),
       c6: checkMaterial(im, pathIndex),
       c7: checkRevisionConsistency(im, pathIndex),
+      c8: checkSketchParts(im, pathIndex),
+      c9: checkItemState(im, pathIndex),
       total: im.rows.length,
     };
   }
@@ -341,9 +426,12 @@
       boughtOutParts: boughtOutParts,
       END_OF_LINE_NUMBER: END_OF_LINE_NUMBER,
       PURCHASED_PART_RE: PURCHASED_PART_RE,
+      SKETCH_PART_RE: SKETCH_PART_RE,
       buildAssemblyPathSet: buildAssemblyPathSet,
       buildPathIndex: buildPathIndex,
       parentOf: parentOf,
+      ancestorTrail: ancestorTrail,
+      classifyState: classifyState,
       blank: blank,
     },
   };

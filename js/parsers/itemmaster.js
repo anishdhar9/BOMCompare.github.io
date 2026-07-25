@@ -6,9 +6,9 @@
  *
  * Produces: { kind:'itemmaster', rows:[{number,title,description,qty,
  *             itemQty,quantity,quantityText,producer,producerNumber,
- *             entityIcon,material,revision,path,rowType,sourceRow}],
+ *             entityIcon,material,revision,state,path,rowType,sourceRow}],
  *             hasPaths, hasEntityIcon, hasProducer, hasMaterial,
- *             hasRevision, hasItemQty, hasQuantity,
+ *             hasRevision, hasItemQty, hasQuantity, hasState,
  *             projectKey:{spn,pn}|null, sheetName, columns, warnings }
  *
  * `qty` is the resolved quantity used by compare.js's roll-up. Some exports
@@ -86,6 +86,13 @@
     entityIcon: ['entity icon', 'icon'],
     material: ['material'],
     revision: ['revision', 'rev'],
+    // The item's lifecycle state (Certified / New / Obsolete / Invalid /
+    // Phased Out). Two neighbouring columns must NOT be mistaken for it:
+    // "File Link State" (Current / Out of Date / Not Available — a CAD file
+    // link, not the item) and "State (Historical)". Both are listed under
+    // `stateOther` so the longest-prefix rule in matchField keeps them out.
+    state: ['state', 'item state', 'lifecycle state'],
+    stateOther: ['file link state', 'state (historical)', 'vault status', 'file state'],
     // recognized only so it counts toward the header-row marker check below;
     // not a field this parser captures into row data.
     marker: ['category name'],
@@ -140,6 +147,7 @@
           entityIcon: at('entityIcon'),
           material: at('material'),
           revision: at('revision'),
+          state: at('state'),
         },
       };
     }
@@ -204,6 +212,7 @@
           entityIcon: hdr.cols.entityIcon >= 0 ? cellText(row[hdr.cols.entityIcon]) : '',
           material: hdr.cols.material >= 0 ? cellText(row[hdr.cols.material]) : '',
           revision: hdr.cols.revision >= 0 ? cellText(row[hdr.cols.revision]) : '',
+          state: hdr.cols.state >= 0 ? cellText(row[hdr.cols.state]) : '',
           path: hdr.cols.path >= 0 ? parsePath(row[hdr.cols.path]) : null,
           rowType: hdr.cols.rowType >= 0 ? cellText(row[hdr.cols.rowType]) : '',
           sourceRow: r + 1,
@@ -228,6 +237,7 @@
         hasRevision: hdr.cols.revision >= 0,
         hasItemQty: hdr.cols.qty >= 0,
         hasQuantity: hdr.cols.qtyFallback >= 0,
+        hasState: hdr.cols.state >= 0,
         projectKey: extractProjectKey(rootRow),
         columns: hdr.cols,
         warnings: warnings,
