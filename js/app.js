@@ -506,6 +506,14 @@
       desc: 'The same part number used at more than one BOM position should carry the same Revision everywhere it appears.',
       cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
         [['revision', 'Revision'], ['conflictsWith', 'Also Recorded As']]) },
+    { key: 'c8', title: 'Sketch Parts in Item Master (7-333-…)',
+      desc: '7-333-… numbers are rough-sketch models. They may exist in CAD, but only ever as Reference — one reaching the released Item Master is a serious release error. Every hit below shows its Row # and the full parent trail so you can trace how it got in.',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
+        [['title', 'Title'], ['state', 'State'], ['trail', 'Full Parent Trail']]) },
+    { key: 'c9', title: 'Item State (obsolete / invalid revisions)',
+      desc: 'A released BOM should contain Certified items only. Obsolete, Invalid and Phased Out are errors — the part was released against a dead revision. "New" is shown as a warning, not a failure.',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
+        [['title', 'Title'], ['state', 'State'], ['severity', 'Severity']]) },
   ];
 
   function hideImQc() {
@@ -532,10 +540,22 @@
     return null;
   }
 
+  // A check that separates hard errors from warnings (Check 9: state) reports
+  // errorCount/warnCount. When it flagged rows but none is an error, the card
+  // is amber and reads "not yet certified" rather than counting as a failure.
+  function warnOnly(result) {
+    return result.applicable && result.errorCount === 0 && result.warnCount > 0;
+  }
+
   function qcCardFor(check, result, warnMsg) {
-    const cls = !result.applicable ? 'na' : (result.fail.length ? 'red' : (warnMsg ? 'amber' : 'pass'));
+    const soft = warnOnly(result);
+    const cls = !result.applicable ? 'na' : (result.fail.length && !soft ? 'red' : ((soft || warnMsg) ? 'amber' : 'pass'));
     const num = !result.applicable ? 'N/A' : (result.fail.length ? String(result.fail.length) : (warnMsg ? '⚠' : 'PASS'));
-    const sub = !result.applicable ? result.reason : (result.fail.length ? 'flagged' : (warnMsg || 'clean'));
+    const sub = !result.applicable ? result.reason
+      : (soft ? result.warnCount + ' not yet certified (no obsolete/invalid)'
+        : (result.fail.length
+          ? (result.errorCount !== undefined ? result.errorCount + ' error(s)' + (result.warnCount ? ' + ' + result.warnCount + ' warning(s)' : '') : 'flagged')
+          : (warnMsg || 'clean')));
     const el = document.createElement('div');
     el.className = 'card ' + cls;
     el.innerHTML = '<div class="num"></div><div class="lbl"></div>';
@@ -554,9 +574,12 @@
     titleBox.querySelector('.qc-section-title').textContent = check.title;
     titleBox.querySelector('.qc-section-desc').textContent = check.desc;
     head.appendChild(titleBox);
+    const soft = warnOnly(result);
     const pill = document.createElement('span');
-    pill.className = 'qc-pill ' + (!result.applicable ? 'na' : (result.fail.length ? 'fail' : (warnMsg ? 'warn' : 'pass')));
-    pill.textContent = !result.applicable ? 'N/A' : (result.fail.length ? result.fail.length + ' FLAGGED' : (warnMsg ? 'OK, BUT SEE BELOW' : 'OK'));
+    pill.className = 'qc-pill ' + (!result.applicable ? 'na' : (result.fail.length && !soft ? 'fail' : ((soft || warnMsg) ? 'warn' : 'pass')));
+    pill.textContent = !result.applicable ? 'N/A'
+      : (soft ? result.warnCount + ' TO REVIEW'
+        : (result.fail.length ? result.fail.length + ' FLAGGED' : (warnMsg ? 'OK, BUT SEE BELOW' : 'OK')));
     head.appendChild(pill);
     box.appendChild(head);
 
@@ -575,7 +598,11 @@
       for (const row of result.fail) {
         const tr = document.createElement('tr');
         for (const col of check.cols) addTd(tr, qcCellValue(col, row));
-        decorateSecondary(tr, check.key, row.number);
+        // Check 9's warning rows are ranked under their own key in the
+        // findings registry (see findings.js), so match that here or every
+        // warning row would look like a demoted duplicate of itself.
+        const key = (check.key === 'c9' && !/^ERROR/.test(row.severity || '')) ? 'c9warn' : check.key;
+        decorateSecondary(tr, key, row.number);
         table.appendChild(tr);
       }
       body.appendChild(table);
@@ -606,6 +633,12 @@
 
     const callout = $('qc-callout');
     const bits = [];
+    if (qc.c8 && qc.c8.applicable && qc.c8.fail.length) {
+      bits.push('🚨 ' + qc.c8.fail.length + ' sketch part(s) (7-333-…) made it into the Item Master — these must never be released');
+    }
+    if (qc.c9 && qc.c9.applicable && qc.c9.errorCount) {
+      bits.push('🚨 ' + qc.c9.errorCount + ' part(s) released against an obsolete/invalid state');
+    }
     if (qc.c5.applicable && qc.c5.fail.length) {
       bits.push(qc.c5.fail.length + ' row(s) need Title and/or Description populated');
     }
@@ -750,6 +783,20 @@
 
     const qc = state.imQc;
     if (qc) {
+      // The two release-blocking checks get their own tiles — a sketch part in
+      // the Item Master, or a part released against a dead revision, is a
+      // different class of problem from general data-quality tidiness.
+      if (qc.c8 && qc.c8.applicable) {
+        tiles.push({ num: qc.c8.fail.length, label: 'Sketch parts (7-333-) in Item Master',
+          sub: qc.c8.fail.length ? 'must never be released — trace below' : 'none present ✓',
+          cls: qc.c8.fail.length ? 'red' : 'pass', onClick: function () { jumpTo('im-qc'); } });
+      }
+      if (qc.c9 && qc.c9.applicable) {
+        tiles.push({ num: qc.c9.errorCount, label: 'Obsolete / invalid states',
+          sub: qc.c9.warnCount ? qc.c9.warnCount + ' more not yet certified' : (qc.c9.errorCount ? 'released against a dead revision' : 'all states valid ✓'),
+          cls: qc.c9.errorCount ? 'red' : (qc.c9.warnCount ? 'amber' : 'pass'),
+          onClick: function () { jumpTo('im-qc'); } });
+      }
       let flagged = 0, applicable = 0;
       for (const check of QC_CHECKS) { const r = qc[check.key]; if (r.applicable) { applicable++; if (r.fail.length) flagged++; } }
       tiles.push({ num: flagged, label: 'Item Master quality issues',

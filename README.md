@@ -88,7 +88,10 @@ hierarchy from filename indentation. Scanned (image-only) PDFs are not supported
 
 The Vault/ERP item BOM grid export (`.xls`/`.xlsx`) with a `Number` header column.
 `Row Order` (dotted position paths like `2.8.1`) enables hierarchy-aware grouping and
-quantity roll-up; `Item Qty`/`Quantity` enables quantity comparison.
+quantity roll-up; `Item Qty`/`Quantity` enables quantity comparison; `State` enables the
+item-state check (see Check 9). `State` is matched exactly so the neighbouring
+`File Link State` and `State (Historical)` columns — which describe the CAD file link, not
+the item — are never read in its place.
 
 Some exports carry more than one quantity-ish column (e.g. `Item Qty`, `Quantity`,
 `Unit Qty`) that don't always agree — real exports have been seen where `Item Qty` sits at
@@ -153,15 +156,18 @@ Severity order, worst first:
 
 | # | Check |
 |---|---|
-| 1 | Missing from Item Master |
-| 2 | Long-lead part missing from Item Master |
-| 3 | Reference item |
-| 4 | Quantity mismatch (CAD vs Item Master) |
-| 5 | Long-lead quantity mismatch |
-| 6 | Revision mismatch vs CAD |
-| 7 | Material mismatch vs CAD |
-| 8 | In Item Master only |
-| 9 | Item Master data-quality checks (Quantity vs Item Qty, Revision consistency, Material, Title/Description, Entity Icon, Producer, End of Line) |
+| 1 | Sketch part (`7-333-`) in Item Master — release-blocking |
+| 2 | Obsolete / invalid state — release-blocking |
+| 3 | Missing from Item Master |
+| 4 | Long-lead part missing from Item Master |
+| 5 | Reference item |
+| 6 | Quantity mismatch (CAD vs Item Master) |
+| 7 | Long-lead quantity mismatch |
+| 8 | Revision mismatch vs CAD |
+| 9 | Material mismatch vs CAD |
+| 10 | In Item Master only |
+| 11 | Item Master data-quality checks (Quantity vs Item Qty, Revision consistency, Material, Title/Description, Entity Icon, Producer, End of Line) |
+| 12 | Not yet certified (`New` state) — ranked low so it can't bury a real finding |
 
 A **Parts needing attention** table sits at the top: one row per part, worst issue first,
 showing every issue found on it. Clicking a row jumps to the section that owns it.
@@ -220,6 +226,25 @@ different failure mode than CAD-vs-BOM drift:
    occurrence was updated to a newer released revision and the others weren't picked up.
    Values are compared directly (not normalized); revisions are simple codes, not something
    needing a grade-equivalence lookup like material.
+8. **Sketch parts in the Item Master** (release-blocking): `7-333-…` numbers are the
+   rough-sketch equivalent in this organization's 3D modelling. They may exist in CAD, but
+   **only ever as Reference** — one reaching the released Item Master is a serious release
+   error. Every hit is reported with its Row #, Row Order, immediate parent and the **full
+   parent trail** (`ASSY-A (Top Assembly) › SUB-B (Sub Assembly)`) so you can trace exactly
+   how it got in. Deliberately Item-Master-only: their presence in CAD is expected and is
+   not flagged. The banned prefix lives in one constant (`SKETCH_PART_RE` in `js/imqc.js`)
+   so more families can be added later.
+9. **Item state** (release-blocking): a released BOM should contain Certified items only.
+   `Obsolete`, `Invalid` and `Phased Out` are **errors** — the part was released against a
+   dead revision. `New` is surfaced as a **warning**, not a failure, because genuine
+   released exports do contain New rows (6 in one of the real samples); its card turns amber
+   rather than red, and it is ranked low so it can't bury a genuinely missing part. Reads the
+   Item Master's `State` column, carefully distinguished from the neighbouring
+   `File Link State` (Current / Out of Date) and `State (Historical)` columns, which describe
+   the CAD file link rather than the item.
+
+Checks 8 and 9 each get their own summary box, and any hit also raises a 🚨 banner above the
+detail sections.
 
 A check can *pass* on its own terms while a related cross-source comparison still finds a
 real problem — e.g. every part has a Material value (check 6 passes), but one of those values

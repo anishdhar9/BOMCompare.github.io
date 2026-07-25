@@ -350,6 +350,23 @@ console.log('\n== synthetic: Item Master column-name robustness (itemmaster.js) 
   const imUnitQty = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => unitQtyAoa } });
   check('"Unit Qty" does not displace a genuine "Item Qty" column', imUnitQty && imUnitQty.rows[0].itemQty === 4 && imUnitQty.hasItemQty === true, imUnitQty && imUnitQty.rows[0]);
   check('with a genuine Item Qty present, Check 3 is applicable', imQc.runChecks(imUnitQty).c3.applicable === true, imQc.runChecks(imUnitQty).c3);
+
+  // "State" sits in wildly different positions across real exports (column 1
+  // in one 726020775 EBOM, column 9 in the other) and shares a prefix with
+  // two decoy columns — the match must be positional-agnostic and exact.
+  const stateEarly = [
+    ['Number', 'State', 'Quantity', 'File Link State', 'Row Order', 'Title (Item,CO)'],
+    ['PART-A', 'Obsolete', '1 Each', 'Out of Date', '1', 'A'],
+  ];
+  const stateLate = [
+    ['Number', 'Revision', 'Row Order', 'Quantity', 'Title (Item,CO)', 'Material', 'State', 'State (Historical)'],
+    ['PART-A', '1', '1', '1 Each', 'A', 'AISI 304', 'Obsolete', 'Certified'],
+  ];
+  for (const [label, aoa] of [['State early (col 1)', stateEarly], ['State late (col 6)', stateLate]]) {
+    const parsed = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => aoa } });
+    check(label + ': State resolved to the item state, decoys ignored',
+      parsed && parsed.hasState === true && parsed.rows[0].state === 'Obsolete', parsed && parsed.rows[0]);
+  }
 }
 
 /* ---------------- synthetic: dual-source reference detection ---------------- */
@@ -558,6 +575,84 @@ console.log('\n== synthetic: Revision Consistency (c7) + Revision: CAD vs Item M
   check('revisionsMatch: exact values match, case/whitespace-insensitive', revisionCompare.revisionsMatch(' b ', 'B'));
   check('revisionsMatch: different values do not match', !revisionCompare.revisionsMatch('A', 'B'));
   check('revisionsMatch: blank never matches', !revisionCompare.revisionsMatch('', 'A') && !revisionCompare.revisionsMatch('A', ''));
+}
+
+console.log('\n== synthetic: sketch parts in Item Master (c8) + item state (c9) ==');
+{
+  // 7-333-* are rough-sketch models. They may exist in CAD, but only ever as
+  // Reference -- one reaching the released Item Master is a serious release
+  // error, so each hit must be traceable to exactly where it got in.
+  const aoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'State', 'Quantity', 'Item Qty'],
+    ['MACH-01', '-', 'Main Machine', 'desc', 'Certified', '1 Each', '1'],
+    ['ASSY-A', '1', 'Top Assembly', 'desc', 'Certified', '1 Each', '1'],
+    ['SUB-B', '1.2', 'Sub Assembly', 'desc', 'Certified', '1 Each', '1'],
+    ['7-333-29220', '1.2.3', 'ROUGH SKETCH BRACKET', 'sketch', 'Obsolete', '2 Each', '2'],
+    ['7-333-10074', '2', 'SKETCH PLATE', 'sketch', 'Certified', '1 Each', '1'],
+    ['PART-OK', '1.2.4', 'Fine part', 'desc', 'Certified', '1 Each', '1'],
+    ['PART-INV', '1.5', 'Invalid part', 'desc', 'Invalid', '1 Each', '1'],
+    ['PART-PO', '1.6', 'Phased part', 'desc', 'Phased Out', '1 Each', '1'],
+    ['PART-NEW', '1.7', 'New part', 'desc', 'New', '1 Each', '1'],
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => aoa } });
+  check('Item Master State column captured', im.hasState === true && im.rows[3].state === 'Obsolete', im.rows[3]);
+  const qc = imQc.runChecks(im);
+
+  check('c8 flags both 7-333-* parts and nothing else',
+    qc.c8.applicable === true && qc.c8.fail.length === 2 &&
+    qc.c8.fail.every(f => /^7-333-/.test(f.number)), qc.c8.fail.map(f => f.number));
+  check('c8 records the Row # of each sketch part', qc.c8.fail[0].sourceRow === 5 && qc.c8.fail[1].sourceRow === 6,
+    qc.c8.fail.map(f => f.sourceRow));
+  // The whole point: not just the immediate parent, the full chain in.
+  check('c8 maps the FULL parent trail, not just the immediate parent',
+    qc.c8.fail[0].trail === 'ASSY-A (Top Assembly) › SUB-B (Sub Assembly)', qc.c8.fail[0].trail);
+  check('c8 still reports a top-level sketch part, with no trail',
+    qc.c8.fail[1].rowOrder === '2' && qc.c8.fail[1].trail === '(top level)', qc.c8.fail[1]);
+  check('c8 is always applicable (a clean BOM simply has no hits)',
+    imQc.runChecks(itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } },
+      { utils: { sheet_to_json: () => aoa.filter(r => !/^7-333-/.test(String(r[0]))) } })).c8.fail.length === 0);
+
+  check('c9 counts Obsolete/Invalid/Phased Out as errors and New as a warning',
+    qc.c9.applicable === true && qc.c9.errorCount === 3 && qc.c9.warnCount === 1,
+    { err: qc.c9.errorCount, warn: qc.c9.warnCount });
+  check('c9 leaves Certified rows alone', !qc.c9.fail.some(f => f.state === 'Certified'), qc.c9.fail.map(f => f.state));
+  check('c9 sorts hard errors above warnings', /^ERROR/.test(qc.c9.fail[0].severity) &&
+    /^warning/.test(qc.c9.fail[qc.c9.fail.length - 1].severity), qc.c9.fail.map(f => f.severity));
+  check('c9 not-applicable when the export has no State column',
+    imQc.runChecks(itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } },
+      { utils: { sheet_to_json: () => aoa.map(r => r.slice(0, 4)) } })).c9.applicable === false);
+
+  check('classifyState: Certified/Released pass', imQc.classifyState('Certified') === 'ok' && imQc.classifyState('Released') === 'ok');
+  check('classifyState: Obsolete/Invalid/Phased Out are errors, case- and hyphen-insensitive',
+    ['Obsolete', 'invalid', 'Phased Out', 'phased-out'].every(s => imQc.classifyState(s) === 'error'));
+  check('classifyState: New is a warning, not an error', imQc.classifyState('New') === 'warn');
+  check('classifyState: blank is neither', imQc.classifyState('') === 'blank');
+
+  // "File Link State" (Current/Out of Date) and "State (Historical)" describe
+  // the CAD file link, not the item -- neither must be read as the item state.
+  const decoyAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'File Link State', 'State (Historical)'],
+    ['PART-A', '1', 'A', 'Out of Date', 'Obsolete'],
+  ];
+  const decoyIm = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => decoyAoa } });
+  check('"File Link State" / "State (Historical)" are NOT read as the item State',
+    decoyIm.hasState === false && imQc.runChecks(decoyIm).c9.applicable === false, decoyIm.columns);
+
+  // Registry ranking: a sketch part outranks everything; "New" ranks low so a
+  // legitimately-uncertified row can't bury a genuinely missing part.
+  const reg = findings.buildRegistry({ imQc: qc });
+  const sketch = reg.byPn.get('7-333-29220');
+  check('a sketch part is owned by c8, above its own obsolete state',
+    sketch.primary.key === 'c8' && sketch.issues.some(i => i.key === 'c9'), sketch.issues.map(i => i.key));
+  // Both sketch parts tie at the top severity, so they sort by number between
+  // themselves — what matters is that they outrank every other finding.
+  check('sketch parts are the worst findings in the whole registry',
+    reg.parts[0].primary.key === 'c8' && reg.parts[1].primary.key === 'c8' &&
+    reg.parts.slice(2).every(p => p.primary.key !== 'c8'), reg.parts.slice(0, 3).map(p => p.number + ':' + p.primary.key));
+  check('an obsolete part outranks a merely-new one',
+    reg.byPn.get('PART-INV').primary.severity > reg.byPn.get('PART-NEW').primary.severity);
+  check('"New" is ranked under its own low-severity key, not as an error',
+    reg.byPn.get('PART-NEW').primary.key === 'c9warn', reg.byPn.get('PART-NEW').primary);
 }
 
 console.log('\n== synthetic: findings registry (one primary finding per part) ==');
@@ -886,6 +981,14 @@ if (cadPath && imPath) {
     hsgQc.c6.fail.map(f => ({ number: f.number, sourceRow: f.sourceRow, parentNumber: f.parentNumber, parentTitle: f.parentTitle })));
   check('HSG c5 fail rows carry a real Row # (parent may be blank only for a top-level row)',
     hsgQc.c5.fail.every(f => f.sourceRow > 1), hsgQc.c5.fail.length);
+  // A clean release: no sketch part should ever have reached the Item Master.
+  check('HSG c8: no 7-333-* sketch part in this Item Master (as it should be)',
+    hsgQc.c8.applicable === true && hsgQc.c8.fail.length === 0, hsgQc.c8.fail);
+  check('HSG c9: State column read, every row Certified',
+    hsgQc.c9.applicable === true && hsgQc.c9.errorCount === 0 && hsgQc.c9.warnCount === 0, hsgQc.c9);
+  check('HSG State column resolved to "State", not "File Link State"',
+    im.hasState === true && im.rows.every(r => r.state === 'Certified'),
+    Array.from(new Set(im.rows.map(r => r.state))));
 
   console.log('\n== real samples: material — bought-out parts + CAD vs Item Master ==');
   const boughtOut = imQc.boughtOutParts(im);
@@ -1184,6 +1287,11 @@ if (invBomPath && imBomMatPath) {
   check('726020768 Item Master: 302 rows, projectKey SPN016704/PN22829',
     !!imBomMat && imBomMat.rows.length === 302 && imBomMat.projectKey && imBomMat.projectKey.spn === 'SPN016704' && imBomMat.projectKey.pn === 'PN22829',
     imBomMat && { rows: imBomMat.rows.length, projectKey: imBomMat.projectKey });
+
+  const qc726 = imQc.runChecks(imBomMat);
+  check('726020768 c8: no sketch parts in this Item Master', qc726.c8.fail.length === 0, qc726.c8.fail);
+  check('726020768 c9: State read, all Certified', qc726.c9.applicable === true &&
+    qc726.c9.errorCount === 0 && qc726.c9.warnCount === 0, qc726.c9);
 
   const matRes726 = materialCompare.compareMaterial([invCad], imBomMat);
   check('material check applicable via the Inventor BOM export (not flat-xlsx)', matRes726.applicable === true, matRes726);

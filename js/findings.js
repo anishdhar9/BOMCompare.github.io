@@ -38,6 +38,16 @@
   // quantity is wrong, which outranks a field being inconsistent inside the
   // Item Master. `section`/`tab` are where the UI should jump to.
   const CHECKS = [
+    // Above "missing": a sketch part that reached the released Item Master is
+    // the most serious thing this tool can find — it should never be there at
+    // all, so it always owns the part rather than being demoted behind
+    // another finding.
+    { key: 'c8', severity: 120, label: 'Sketch part (7-333-) in Item Master', section: 'im-qc' },
+    { key: 'c9', severity: 110, label: 'Obsolete / invalid state', section: 'im-qc' },
+    // "New" (not yet certified) is a warning, not a release-blocking error, so
+    // it ranks below the real findings instead of dominating the list — a
+    // genuine export can carry several legitimately-New rows.
+    { key: 'c9warn', severity: 47, label: 'Not yet certified', section: 'im-qc' },
     { key: 'missing', severity: 100, label: 'Missing from Item Master', section: 'results', tab: 'missing' },
     { key: 'lldboMissing', severity: 95, label: 'Long-lead part missing from Item Master', section: 'lldbo-panel' },
     { key: 'reference', severity: 90, label: 'Reference item', section: 'results', tab: 'ref' },
@@ -188,12 +198,18 @@
         c4: function (f) { return 'Entity Icon "' + f.icon + '"'; },
         c1: function (f) { return f.issue || ''; },
         c2: function (f) { return f.issue || ''; },
+        c8: function (f) { return 'Found at ' + (f.trail || 'top level') + (f.state ? ' — state ' + f.state : ''); },
+        c9: function (f) { return 'State "' + f.state + '" — ' + f.severity; },
       };
-      for (const key of ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']) {
+      for (const key of ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9']) {
         const r = qc[key];
         if (!r || !r.applicable) continue;
         for (const f of r.fail || []) {
-          record(key, f.number, {
+          // Check 9 mixes release-blocking states with merely-uncertified
+          // ones; they are ranked separately so a legitimately "New" row
+          // doesn't outrank a part that is missing outright.
+          const k = (key === 'c9' && !/^ERROR/.test(f.severity || '')) ? 'c9warn' : key;
+          record(k, f.number, {
             number: f.number, title: f.title || '',
             detail: detailFor[key] ? detailFor[key](f) : '',
             sourceRow: f.sourceRow, parentNumber: f.parentNumber, parentTitle: f.parentTitle,
