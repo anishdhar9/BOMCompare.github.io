@@ -61,6 +61,17 @@
       <p class="dash-hint">Each tile is a flag count — click one to jump to its details below.</p>
     </section>
 
+    <section class="im-qc hidden" id="attention">
+      <div class="im-qc-head">
+        <div>
+          <h2>Parts needing attention</h2>
+          <p class="dz-hint">One row per part, worst issue first. A part flagged by several checks is listed once here and shows every issue found on it — the detail sections below still carry the full per-check breakdown.</p>
+        </div>
+        <span class="qc-pill na" id="attention-count"></span>
+      </div>
+      <div id="attention-body"></div>
+    </section>
+
     <section class="im-qc hidden" id="im-qc">
       <div class="im-qc-head">
         <div>
@@ -150,6 +161,8 @@
         <summary>How it works & assumptions</summary>
         <ul>
           <li><strong>Overview dashboard:</strong> a panel at the top shows one clickable tile per flag value (findings, quantity/material/revision mismatches, Item Master quality issues), colour-coded, appearing as data loads. Click a tile to jump straight to its details below. Every result — the dashboard and each section — is captioned with the exact source file(s) being compared, so two exports of the same BOM (with different Vault columns enabled) stay traceable.</li>
+          <li><strong>One finding per part:</strong> the same part can legitimately be caught by several checks at once (e.g. it is in the Item Master but not in CAD, <em>and</em> its Quantity and Item Qty disagree). Rather than reporting that as several problems, findings are ranked by severity — missing &gt; reference &gt; quantity &gt; revision &gt; material &gt; in-Item-Master-only &gt; data-quality checks — so each part is owned by its most serious check and every other mention renders muted with an “also in: …” pointer. The <strong>Parts needing attention</strong> table at the top lists each part once with all of its issues.</li>
+          <li><strong>Allied parts:</strong> related parts are rolled up, not repeated. A missing assembly already absorbed its children; “In Item Master only” now does the same over the Item Master's own Row Order hierarchy, so a whole subassembly absent from the CAD BOM is one finding instead of one per part (on a real export, 1033 rows become 11). Grouped children are excluded from the actionable count and revealed with a “show N grouped” toggle. The per-occurrence rows inside a quantity mismatch are kept — they show where the part is used, and aren't duplicates.</li>
           <li><strong>Match key:</strong> part number (Vault item “Number”), case-insensitive.</li>
           <li><strong>CAD BOM sources</strong> (upload one or, better, two together):
             <ul>
@@ -188,6 +201,7 @@
   <script src="js/parsers/lldbo.js"></script>
   <script src="js/parsers/detect.js"></script>
   <script src="js/imqc.js"></script>
+  <script src="js/findings.js"></script>
   <script src="js/material-compare.js"></script>
   <script src="js/revision-compare.js"></script>
   <script src="js/lldbo-compare.js"></script>

@@ -132,7 +132,53 @@ file(s) it came from, so two exports of the same BOM stay traceable and consiste
   Revision for every shared part — see "Revision: CAD vs Item Master" below. Requires a
   Revision column on both sides.
 - **In Item Master only:** items whose number never appears in the CAD BOM — stale or
-  manually added entries worth reviewing.
+  manually added entries worth reviewing. Grouped under their parent assembly (see
+  "Allied parts" below), so a whole subassembly missing from CAD is one finding.
+
+## One finding per part
+
+Every check runs independently, so the same part can legitimately be flagged by several
+of them at once — a part that is in the Item Master but not in CAD shows up under
+"In Item Master only", and if its `Quantity` and `Item Qty` disagree it is flagged by
+Check 3 as well. Read side by side that looks like several different problems when it is
+one part needing one look.
+
+Findings are therefore collected into a single registry (`js/findings.js`), keyed by part
+number and ranked by severity, so each part gets exactly **one primary finding** — the
+most serious check that flagged it — while every other mention is demoted to a muted
+cross-reference ("also in: …") pointing at the primary. Nothing is dropped: the detail
+sections still list every row, they just stop competing for attention.
+
+Severity order, worst first:
+
+| # | Check |
+|---|---|
+| 1 | Missing from Item Master |
+| 2 | Long-lead part missing from Item Master |
+| 3 | Reference item |
+| 4 | Quantity mismatch (CAD vs Item Master) |
+| 5 | Long-lead quantity mismatch |
+| 6 | Revision mismatch vs CAD |
+| 7 | Material mismatch vs CAD |
+| 8 | In Item Master only |
+| 9 | Item Master data-quality checks (Quantity vs Item Qty, Revision consistency, Material, Title/Description, Entity Icon, Producer, End of Line) |
+
+A **Parts needing attention** table sits at the top: one row per part, worst issue first,
+showing every issue found on it. Clicking a row jumps to the section that owns it.
+
+### Allied parts
+
+Related parts are rolled up rather than repeated. "Missing from Item Master" already
+grouped a missing assembly's children beneath it; **"In Item Master only" now does the
+same** over the Item Master's own `Row Order` hierarchy — when a whole subassembly is
+absent from the CAD BOM, that is one finding (the subassembly), not one per part. On a
+real sample this collapses 1033 flat rows to 11 actionable roots with 1022 children
+grouped underneath, without losing a single row. Grouped children are excluded from the
+actionable count and hidden behind a "show N grouped" toggle.
+
+Note the per-occurrence rows inside a quantity mismatch's expander (its `cadBreakdown` /
+`imBreakdown`) are *not* duplicates — they are the "where is this part used" detail, and
+are left as they are.
 
 ## Overview dashboard
 
@@ -265,6 +311,7 @@ js/parsers/detect.js         format detection / role validation
 js/imqc.js                Item Master data-quality checks (no DOM)
 js/material-compare.js    material CAD-vs-IM comparison + bought-out parts (no DOM)
 js/revision-compare.js    revision CAD-vs-IM comparison (no DOM)
+js/findings.js            cross-check findings registry — one primary finding per part (no DOM)
 js/lldbo-compare.js       LLDBO vs Item Master comparison (no DOM)
 js/folder.js              folder auto-load classification/scan (no DOM)
 js/app.js                 UI wiring

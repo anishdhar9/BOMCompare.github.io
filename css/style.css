@@ -150,6 +150,29 @@ body {
 .flag-tile.na { opacity: .6; }
 .flag-tile.na .num { color: var(--muted); font-size: 16px; }
 .dash-hint { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
+
+/* ---- consolidated "parts needing attention" + cross-check demotion ---- */
+.attention-row { cursor: pointer; }
+.attention-row:hover { background: var(--muted-row); }
+.issue-badge {
+  display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 11.5px;
+  font-weight: 600; white-space: nowrap; margin: 1px 3px 1px 0;
+  background: var(--chip-bg); color: var(--muted);
+}
+.issue-badge.primary { background: var(--red-border); color: #fff; }
+.issue-badge.sev-mid { background: var(--amber-bg); color: var(--amber-text); }
+.issue-detail { font-size: 12px; color: var(--muted); }
+/* a row whose part is already reported (more seriously) somewhere else */
+tr.row-demoted { opacity: .55; }
+tr.row-demoted:hover { opacity: 1; }
+.dup-badge {
+  display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11px;
+  background: var(--chip-bg); color: var(--muted); margin-left: 6px; white-space: nowrap;
+}
+.attention-toggle {
+  background: none; border: none; color: var(--accent); font: inherit; font-size: 12.5px;
+  cursor: pointer; padding: 6px 2px; text-decoration: underline;
+}
 .section-flash { animation: sectionFlash 1.1s ease; }
 @keyframes sectionFlash { 0%, 40% { box-shadow: 0 0 0 2px var(--accent); } 100% { box-shadow: none; } }
 .source-line { margin: 0 0 4px; font-size: 12.5px; color: var(--muted); }

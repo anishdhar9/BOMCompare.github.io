@@ -18,7 +18,7 @@ const require = createRequire(import.meta.url);
 const rootDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 const XLSX = require(path.join(rootDir, 'vendor/xlsx.full.min.js'));
-const { compare, compareAll, countDescendants, indexItemMaster, normNumber } = require(path.join(rootDir, 'js/compare.js'));
+const { compare, compareAll, countDescendants, indexItemMaster, normNumber, groupImOnly } = require(path.join(rootDir, 'js/compare.js'));
 const { itemMasterParser } = require(path.join(rootDir, 'js/parsers/itemmaster.js'));
 const { cadFlatParser } = require(path.join(rootDir, 'js/parsers/cad-flat-xlsx.js'));
 const { cadLeveledParser } = require(path.join(rootDir, 'js/parsers/cad-leveled.js'));
@@ -26,6 +26,7 @@ const { detect } = require(path.join(rootDir, 'js/parsers/detect.js'));
 const { imQc } = require(path.join(rootDir, 'js/imqc.js'));
 const { materialCompare } = require(path.join(rootDir, 'js/material-compare.js'));
 const { revisionCompare } = require(path.join(rootDir, 'js/revision-compare.js'));
+const { findings } = require(path.join(rootDir, 'js/findings.js'));
 const { folder } = require(path.join(rootDir, 'js/folder.js'));
 const { lldboParser } = require(path.join(rootDir, 'js/parsers/lldbo.js'));
 const { lldboCompare } = require(path.join(rootDir, 'js/lldbo-compare.js'));
@@ -559,6 +560,92 @@ console.log('\n== synthetic: Revision Consistency (c7) + Revision: CAD vs Item M
   check('revisionsMatch: blank never matches', !revisionCompare.revisionsMatch('', 'A') && !revisionCompare.revisionsMatch('A', ''));
 }
 
+console.log('\n== synthetic: findings registry (one primary finding per part) ==');
+{
+  // A part flagged by several checks should be reported once, owned by the
+  // most serious check, with the rest demoted to cross-references.
+  const reg = findings.buildRegistry({
+    result: {
+      missingRoots: [],
+      referenceRoots: null,
+      qtyMismatches: [{ number: 'PART-Q', title: 'Q', description: '', cadQty: 7, imQty: 1, cadBreakdown: [], imBreakdown: [] }],
+      imOnly: [{ number: 'PART-IO', title: 'IO', description: '', sourceRow: 5, parentNumber: 'ASSY-1', parentTitle: 'A1' }],
+    },
+    imQc: {
+      c3: { applicable: true, fail: [{ number: 'PART-Q', rowOrder: '1.1', title: 'Q', quantity: '7 Each', itemQty: '1', sourceRow: 9 },
+                                     { number: 'PART-IO', rowOrder: '1.2', title: 'IO', quantity: '2 Each', itemQty: '1', sourceRow: 5 }] },
+      c5: { applicable: true, fail: [{ number: 'PART-IO', rowOrder: '1.2', title: '', description: '', kind: 'title-missing', sourceRow: 5 }] },
+      c2: { applicable: true, fail: [{ number: '—', rowOrder: '—', issue: 'No "END OF LINE" entry found in the BOM.' }] },
+    },
+  });
+
+  const q = reg.byPn.get('PART-Q');
+  check('part in both qty-mismatch and c3 is registered once', reg.parts.filter(p => p.number === 'PART-Q').length === 1, reg.parts.map(p => p.number));
+  check('the more serious check (qty, sev 80) owns it over c3 (sev 45)', q.primary.key === 'qty', q.primary);
+  check('the losing check is still recorded, as a secondary issue', q.issues.length === 2 && q.issues[1].key === 'c3' && q.issues[1].primary === false, q.issues);
+  check('isSecondary() true for the demoted check, false for the primary',
+    reg.isSecondary('c3', 'PART-Q') === true && reg.isSecondary('qty', 'PART-Q') === false);
+  check('qty issue carries a human detail string', /7/.test(q.primary.detail) && /1/.test(q.primary.detail), q.primary.detail);
+
+  const io = reg.byPn.get('PART-IO');
+  check('a part flagged by three checks still has one primary, the most serious',
+    io.issues.length === 3 && io.primary.key === 'imOnly', io.issues.map(i => i.key));
+  check('isSecondary() true for both losing checks on that part',
+    reg.isSecondary('c3', 'PART-IO') && reg.isSecondary('c5', 'PART-IO'));
+
+  // Check 2's "no END OF LINE row at all" entry is a whole-BOM assertion, not
+  // a part — it must never become a row in the parts registry.
+  check('Check 2 synthetic "—" row is not registered as a part',
+    !reg.byPn.has('—') && !reg.parts.some(p => p.number === '—'), reg.parts.map(p => p.number));
+
+  check('parts are ordered worst-first', reg.parts[0].number === 'PART-Q', reg.parts.map(p => p.number));
+  check('counts: 2 unique parts, 3 secondary issues', reg.counts.parts === 2 && reg.counts.secondaryTotal === 3, reg.counts);
+  check('unknown part numbers are simply not secondary', reg.isSecondary('c3', 'NOPE') === false);
+
+  // Grouped children: a part explained by a flagged parent is not its own finding.
+  const treeReg = findings.buildRegistry({
+    result: {
+      missingRoots: [{ item: { number: 'ASSY-1', title: 'Assembly' }, children: [{ item: { number: 'CHILD-1', title: 'Child' }, children: [] }] }],
+      referenceRoots: null, qtyMismatches: [], imOnly: [],
+    },
+  });
+  check('a missing assembly is actionable, its child is grouped',
+    treeReg.counts.actionable === 1 && treeReg.counts.grouped === 1, treeReg.counts);
+  check('the grouped child records which parent explains it',
+    treeReg.byPn.get('CHILD-1').grouped === true && treeReg.byPn.get('CHILD-1').groupedUnder === 'ASSY-1', treeReg.byPn.get('CHILD-1'));
+  check('the root itself is not marked grouped', treeReg.byPn.get('ASSY-1').grouped === false);
+}
+
+console.log('\n== synthetic: "In Item Master only" parent rollup (groupImOnly) ==');
+{
+  // Reuses the same shape as the missing-item tree so renderTree/countDescendants work.
+  const rows = [
+    { number: 'ASSY-1', title: 'Assembly', path: ['1'], sourceRow: 2 },
+    { number: 'CHILD-A', title: 'Child A', path: ['1', '1'], sourceRow: 3 },
+    { number: 'CHILD-B', title: 'Child B', path: ['1', '2'], sourceRow: 4 },
+    { number: 'GRAND-C', title: 'Grandchild', path: ['1', '2', '1'], sourceRow: 5 },
+    { number: 'LONE-1', title: 'Unrelated', path: ['2'], sourceRow: 6 },
+  ];
+  const byPath = new Map(rows.map(r => [r.path.join('.'), r]));
+  const roots = groupImOnly(rows, byPath);
+  check('a whole flagged subassembly collapses to one root', roots.length === 2, roots.map(r => r.item.number));
+  check('every row is still present in the tree (nothing dropped)',
+    roots.reduce((n, r) => n + 1 + countDescendants(r), 0) === rows.length,
+    roots.map(r => r.item.number + ':' + countDescendants(r)));
+  check('nesting follows the Row Order hierarchy, not just the direct parent',
+    countDescendants(roots[0]) === 3 && roots[1].item.number === 'LONE-1', roots);
+
+  // No Row Order column -> nothing to group by; must degrade, not crash.
+  const flat = groupImOnly(rows.map(r => ({ number: r.number, title: r.title, path: null })), new Map());
+  check('degrades to one root per part when the export has no Row Order', flat.length === rows.length, flat.length);
+
+  // A parent that is NOT itself flagged must not swallow its children.
+  const orphanRows = [{ number: 'CHILD-X', title: 'X', path: ['9', '1'], sourceRow: 7 }];
+  const orphanByPath = new Map([['9', { number: 'PRESENT-PARENT', title: 'in CAD' }], ['9.1', orphanRows[0]]]);
+  check('a child whose parent is not flagged stays top-level',
+    groupImOnly(orphanRows, orphanByPath).length === 1);
+}
+
 console.log('\n== synthetic: folder auto-load file classification ==');
 {
   const cases = [
@@ -858,6 +945,73 @@ if (cadPath && imPath) {
     res.imOnly.every(r => typeof r.sourceRow === 'number' && r.sourceRow > 0 &&
       typeof r.parentNumber === 'string' && typeof r.parentTitle === 'string'),
     res.imOnly.slice(0, 3));
+  check('IM-only entries are also grouped under their flagged parent, losing nothing',
+    res.imOnlyRoots.length <= res.imOnly.length &&
+    res.imOnlyRoots.reduce((n, r) => n + 1 + countDescendants(r), 0) === res.imOnly.length,
+    { roots: res.imOnlyRoots.length, flat: res.imOnly.length });
+
+  // Cross-check de-duplication on real data. In THIS pairing (flat CAD_Bom
+  // export vs the HSG Item Master) three parts are genuinely flagged by two
+  // checks at once; each must collapse to one part owned by the more serious
+  // check, with the loser demoted to a cross-reference.
+  console.log('\n== real samples: findings registry de-duplication ==');
+  const hsgReg = findings.buildRegistry({
+    result: res, imQc: hsgQc, materialResult: matRes,
+    revisionResult: revisionCompare.compareRevision([cad], im),
+  });
+  const overlaps = hsgReg.parts.filter(p => p.issues.length > 1);
+  check('exactly 3 real parts are flagged by more than one check',
+    overlaps.length === 3, overlaps.map(p => p.number + ':' + p.issues.map(i => i.key).join('+')));
+  check('every one of them is owned by "In Item Master only", the more serious check',
+    overlaps.every(p => p.primary.key === 'imOnly'), overlaps.map(p => p.primary.key));
+  check('2-999-06110 (imOnly + c3): Check-3 row demoted, imOnly row kept primary',
+    hsgReg.isSecondary('c3', '2-999-06110') === true && hsgReg.isSecondary('imOnly', '2-999-06110') === false);
+  check('5-233-20286 (imOnly + c5): Check-5 row demoted', hsgReg.isSecondary('c5', '5-233-20286') === true);
+  check('no part is registered twice',
+    new Set(hsgReg.parts.map(p => normNumber(p.number))).size === hsgReg.parts.length, hsgReg.parts.length);
+  check('every registered part has exactly one primary issue',
+    hsgReg.parts.every(p => p.issues.filter(i => i.primary).length === 1), hsgReg.counts);
+  check('actionable + grouped accounts for every registered part',
+    hsgReg.counts.actionable + hsgReg.counts.grouped === hsgReg.counts.parts, hsgReg.counts);
+  check('grouped children (explained by a flagged parent) are excluded from actionable',
+    hsgReg.counts.grouped > 0 && hsgReg.parts.filter(p => p.grouped).every(p => !!p.groupedUnder),
+    hsgReg.counts.grouped);
+  // 7-238-23791 (LTB-4 PANEL MOUNTING FRAME) is present in this CAD export, so
+  // here it is only an internal Check-3 finding — it is the OTHER pairing
+  // (against the 732020066 export) where it is also "In Item Master only".
+  const ltb = hsgReg.byPn.get('7-238-23791');
+  check('LTB-4 7-238-23791 registered once, owned by Check 3 in this pairing',
+    !!ltb && ltb.issues.length === 1 && ltb.primary.key === 'c3', ltb && ltb.issues.map(i => i.key));
+
+  // The pairing the user actually reported: the 732020066 Inventor export vs
+  // this same Item Master. There LTB-4 IS absent from the CAD BOM, so it is
+  // flagged by "In Item Master only" AND Check 3 — the exact double-report
+  // this whole change exists to collapse.
+  if (inv732Path) {
+    const inv732 = detect.parseCadFromWorkbook(XLSX.read(fs.readFileSync(inv732Path), { type: 'buffer' }), XLSX).ok;
+    const res732 = compareAll([inv732], im);
+    const reg732 = findings.buildRegistry({
+      result: res732, imQc: hsgQc,
+      materialResult: materialCompare.compareMaterial([inv732], im),
+      revisionResult: revisionCompare.compareRevision([inv732], im),
+    });
+    const ltb732 = reg732.byPn.get('7-238-23791');
+    check('LTB-4 vs 732020066: flagged by both "In Item Master only" and Check 3',
+      !!ltb732 && ltb732.issues.length === 2 &&
+      ltb732.issues.some(i => i.key === 'imOnly') && ltb732.issues.some(i => i.key === 'c3'),
+      ltb732 && ltb732.issues.map(i => i.key));
+    check('LTB-4 vs 732020066: reported once, owned by "In Item Master only"',
+      !!ltb732 && ltb732.primary.key === 'imOnly' &&
+      reg732.parts.filter(p => normNumber(p.number) === '7-238-23791').length === 1,
+      ltb732 && ltb732.primary.key);
+    check('LTB-4 vs 732020066: its Check-3 row renders as a cross-reference',
+      reg732.isSecondary('c3', '7-238-23791') === true && reg732.isSecondary('imOnly', '7-238-23791') === false);
+    check('vs 732020066: 1033 flat "In Item Master only" rows collapse to 11 roots',
+      res732.imOnly.length === 1033 && res732.imOnlyRoots.length === 11,
+      { flat: res732.imOnly.length, roots: res732.imOnlyRoots.length });
+    check('vs 732020066: the rollup loses nothing (tree still holds all 1033)',
+      res732.imOnlyRoots.reduce((n, r) => n + 1 + countDescendants(r), 0) === res732.imOnly.length);
+  }
 
   const roots = res.missingRoots;
   check('actionable findings = 18', roots.length === 18, roots.length);
