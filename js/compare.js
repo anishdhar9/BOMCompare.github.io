@@ -251,6 +251,46 @@
     return n;
   }
 
+  // Same idea as groupMissingLeveled, but over the Item Master's own Row Order
+  // hierarchy instead of CAD levels: an "in Item Master only" row whose nearest
+  // ancestor is itself Item-Master-only goes under that ancestor. When a whole
+  // subassembly is absent from the CAD BOM every one of its parts is flagged,
+  // which is one finding (the subassembly), not hundreds — on a real sample this
+  // collapses 1033 flat rows to 11 roots.
+  //
+  // `rows` are the flat imOnly entries (in file order); `byPath` is
+  // indexItemMaster's path index. Falls back to one root per row when the export
+  // has no Row Order column (nothing to group by).
+  function groupImOnly(rows, byPath) {
+    const rootNodes = [];
+    const seen = new Map();  // PN -> node (first occurrence wins)
+    const flagged = new Set();
+    for (const r of rows) {
+      const pn = normNumber(r.number);
+      if (pn) flagged.add(pn);
+    }
+    for (const row of rows) {
+      const pn = normNumber(row.number);
+      if (!pn || seen.has(pn)) continue;
+      const node = makeNode(row);
+      seen.set(pn, node);
+      // nearest ancestor (by Row Order path) that is itself Item-Master-only
+      let anc = null;
+      const path = Array.isArray(row.path) ? row.path : null;
+      if (path) {
+        for (let i = path.length - 1; i >= 1; i--) {
+          const cand = byPath.get(path.slice(0, i).join('.'));
+          if (!cand) continue;
+          const cpn = normNumber(cand.number);
+          if (cpn !== pn && flagged.has(cpn)) { anc = seen.get(cpn) || null; break; }
+        }
+      }
+      if (anc) attachChild(anc, node);
+      else rootNodes.push(node);
+    }
+    return rootNodes;
+  }
+
   /* ------------------------------------------------------------------ *
    * Dual-source helpers
    * ------------------------------------------------------------------ */
@@ -387,6 +427,7 @@
         parentTitle: parentRow ? (parentRow.title || '') : '',
       }));
     }
+    const imOnlyRoots = groupImOnly(imOnly, imIndex.byPath);
 
     // 4) reference components: in the full CAD structure but not in the
     // intended-BOM export — the direct review list for "was this meant to be
@@ -423,7 +464,9 @@
       missingRoots: missingRoots,             // actionable top-level findings (tree)
       actionableCount: missingRoots.length,
       qtyMismatches: qtyMismatches,           // null when no CAD source has quantities
-      imOnly: imOnly,
+      imOnly: imOnly,                         // flat list (exports + findings registry)
+      imOnlyRoots: imOnlyRoots,               // same entries grouped under their IM parent
+      imOnlyActionable: imOnlyRoots.length,
       referenceRoots: referenceRoots,         // null unless structure + intended-BOM sources present
       referenceTotal: referenceTotal,
       hasQty: !!qtySource,
@@ -449,5 +492,6 @@
     compare: compare,
     compareAll: compareAll,
     countDescendants: countDescendants,
+    groupImOnly: groupImOnly,
   };
 });

@@ -23,6 +23,8 @@
     lldboResult: null,   // js/lldbo-compare.js compareLldbo() result
     materialResult: null, // js/material-compare.js compareMaterial() result
     revisionResult: null, // js/revision-compare.js compareRevision() result
+    findings: null,       // js/findings.js buildRegistry() — cross-check registry
+    showGrouped: false,   // "parts needing attention": reveal grouped children
   };
 
   // Base name suffix from the Item Master's SPN/PN project key, e.g.
@@ -573,6 +575,7 @@
       for (const row of result.fail) {
         const tr = document.createElement('tr');
         for (const col of check.cols) addTd(tr, qcCellValue(col, row));
+        decorateSecondary(tr, check.key, row.number);
         table.appendChild(tr);
       }
       body.appendChild(table);
@@ -587,6 +590,7 @@
   function renderImQc() {
     const qc = state.imQc;
     if (!qc) { hideImQc(); return; }
+    rebuildFindings(); // rows below are decorated against it
     $('im-qc').classList.remove('hidden');
     setSourceLine($('qc-source'), { imOnly: true });
     const summary = $('qc-summary');
@@ -688,8 +692,24 @@
   // state on every change, so it always reflects whatever has been loaded and
   // compared so far — QC/material/revision appear as soon as the Item Master
   // (and a CAD source) load; the compare tiles appear once "Compare" is run.
+  // Rebuilds the cross-check registry from current state. Must run BEFORE any
+  // renderer that calls decorateSecondary(), otherwise those rows are decorated
+  // against a stale registry (e.g. a quantity mismatch marked secondary to a
+  // check that only looked primary because the comparison hadn't run yet).
+  function rebuildFindings() {
+    state.findings = BC.findings.buildRegistry({
+      result: state.result,
+      imQc: state.imQc,
+      materialResult: state.materialResult,
+      revisionResult: state.revisionResult,
+      lldboResult: state.lldboResult,
+    });
+  }
+
   function renderDashboard() {
     const dash = $('dashboard');
+    rebuildFindings();
+    renderAttention();
     if (!state.im && !state.cadSources.length) { dash.classList.add('hidden'); return; }
     dash.classList.remove('hidden');
     setSourceLine($('dash-source'));
@@ -697,6 +717,17 @@
     const wrap = $('dash-tiles');
     wrap.innerHTML = '';
     const tiles = [];
+
+    const reg = state.findings;
+    if (reg && reg.counts.parts) {
+      tiles.push({
+        num: reg.counts.actionable,
+        label: 'Parts needing attention',
+        sub: reg.counts.grouped ? '+' + reg.counts.grouped + ' grouped under a parent' : 'unique parts, worst issue first',
+        cls: reg.counts.actionable ? 'red' : 'pass',
+        onClick: function () { jumpTo('attention'); },
+      });
+    }
 
     const res = state.result;
     if (res) {
@@ -735,6 +766,123 @@
     }
 
     for (const t of tiles) wrap.appendChild(dashTileEl(t));
+  }
+
+  /* ----- consolidated "parts needing attention" + cross-check demotion ----- */
+
+  function issueBadgeEl(issue) {
+    const b = document.createElement('span');
+    b.className = 'issue-badge' + (issue.primary ? ' primary' : (issue.severity >= 60 ? ' sev-mid' : ''));
+    b.textContent = issue.label + (issue.occurrences > 1 ? ' ×' + issue.occurrences : '');
+    if (issue.detail) b.title = issue.detail;
+    return b;
+  }
+
+  // One row per part, worst issue first. A part flagged by several checks is
+  // listed once here with every issue on it, instead of once per check.
+  function renderAttention() {
+    const sec = $('attention');
+    const body = $('attention-body');
+    const reg = state.findings;
+    body.innerHTML = '';
+    if (!reg || !reg.counts.parts) { sec.classList.add('hidden'); return; }
+    sec.classList.remove('hidden');
+    $('attention-count').textContent = reg.counts.actionable + ' PART(S)' +
+      (reg.counts.grouped ? ' · ' + reg.counts.grouped + ' GROUPED' : '');
+
+    const cols = visibleCols();
+    const table = document.createElement('table');
+    table.className = 'results-table';
+    const htr = document.createElement('tr');
+    addTh(htr, 'Part Number');
+    if (cols.title) addTh(htr, 'Title');
+    addTh(htr, 'Issues found');
+    addTh(htr, 'Detail');
+    if (cols.row) addTh(htr, 'Row #');
+    addTh(htr, 'Grouped under');
+    table.appendChild(htr);
+
+    const shown = reg.parts.filter(function (p) {
+      if (!state.showGrouped && p.grouped) return false;
+      return matchesFilter([p.number, p.title, p.description]);
+    });
+    for (const part of shown) {
+      const tr = document.createElement('tr');
+      tr.className = 'attention-row' + (part.grouped ? ' row-child' : '');
+      const tdNum = document.createElement('td');
+      tdNum.className = 'num-cell';
+      tdNum.textContent = part.number;
+      tr.appendChild(tdNum);
+      if (cols.title) addTd(tr, part.title);
+      const tdIssues = document.createElement('td');
+      for (const i of part.issues) tdIssues.appendChild(issueBadgeEl(i));
+      tr.appendChild(tdIssues);
+      const tdDetail = document.createElement('td');
+      tdDetail.className = 'issue-detail';
+      tdDetail.textContent = part.primary ? part.primary.detail : '';
+      tr.appendChild(tdDetail);
+      if (cols.row) addTd(tr, part.primary ? part.primary.sourceRow : '');
+      addTd(tr, part.groupedUnder || '');
+      // clicking jumps to wherever the part's worst issue actually lives
+      tr.addEventListener('click', function () {
+        if (part.primary) jumpTo(part.primary.section, part.primary.tab);
+      });
+      table.appendChild(tr);
+    }
+    if (!shown.length) {
+      body.innerHTML = '<div class="empty-state">' + (state.filter ? 'Nothing matches the filter.' : '✓ No parts flagged by any check.') + '</div>';
+    } else {
+      body.appendChild(table);
+    }
+    if (reg.counts.grouped) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'attention-toggle';
+      btn.textContent = state.showGrouped
+        ? 'Hide ' + reg.counts.grouped + ' parts grouped under a flagged parent'
+        : 'Show ' + reg.counts.grouped + ' parts grouped under a flagged parent';
+      btn.addEventListener('click', function () { state.showGrouped = !state.showGrouped; renderAttention(); });
+      body.appendChild(btn);
+    }
+  }
+
+  // AOA rows for the "Parts needing attention" export sheet — one row per part
+  // with every issue found on it, so the same part isn't chased across sheets.
+  function attentionSheetRows(reg) {
+    const rows = [['Action needed', 'Part Number', 'Title', 'Primary issue', 'Detail',
+      'All issues found', 'Row #', 'Parent Number', 'Grouped under']];
+    for (const p of reg.parts) {
+      rows.push([
+        p.grouped ? 'grouped (parent also flagged)' : 'YES',
+        p.number, p.title,
+        p.primary ? p.primary.label : '',
+        p.primary ? p.primary.detail : '',
+        p.issues.map(function (i) { return i.label + (i.occurrences > 1 ? ' x' + i.occurrences : ''); }).join('; '),
+        p.primary ? p.primary.sourceRow : '',
+        p.primary ? p.primary.parentNumber : '',
+        p.groupedUnder || '',
+      ]);
+    }
+    return rows;
+  }
+
+  // Mutes a detail row whose part is already reported, more seriously,
+  // somewhere else — so the same part read across sections doesn't look like
+  // several unrelated problems. The row stays (nothing is hidden), it just
+  // points at the finding that owns it.
+  function decorateSecondary(tr, checkKey, number, cell) {
+    const reg = state.findings;
+    if (!reg || !number || !reg.isSecondary(checkKey, number)) return;
+    tr.classList.add('row-demoted');
+    const primary = reg.primaryFor(number);
+    if (!primary) return;
+    tr.title = 'Also reported under: ' + primary.label;
+    const target = cell || tr.firstChild;
+    if (!target) return;
+    const badge = document.createElement('span');
+    badge.className = 'dup-badge';
+    badge.textContent = 'also in: ' + primary.label;
+    target.appendChild(badge);
   }
 
   // AOA rows for the "Item Master QC" export sheet, shared by the main
@@ -791,7 +939,9 @@
     return el;
   }
 
-  function lldboSectionFor(title, desc, cols, fail, emptyText) {
+  // `checkKey` (optional) ties the rows back to the findings registry so a part
+  // already reported more seriously elsewhere renders muted with a cross-ref.
+  function lldboSectionFor(title, desc, cols, fail, emptyText, checkKey) {
     const box = document.createElement('div');
     box.className = 'qc-section';
     const head = document.createElement('div');
@@ -820,6 +970,7 @@
       for (const row of fail) {
         const tr = document.createElement('tr');
         for (const [key] of cols) addTd(tr, row[key]);
+        if (checkKey) decorateSecondary(tr, checkKey, row.number);
         table.appendChild(tr);
       }
       body.appendChild(table);
@@ -837,6 +988,7 @@
   function renderLldboPanel() {
     const res = state.lldboResult;
     if (!res) { hideLldboResults(); return; }
+    rebuildFindings(); // rows below are decorated against it
 
     const warnEl = $('lldbo-project-warning');
     if (res.projectKeyMismatch) {
@@ -864,13 +1016,15 @@
       'Missing from Item Master',
       'Long-lead parts released early to procurement that never made it into the Item Master — the part may quietly never get ordered through the normal channel.',
       LLDBO_MISSING_COLS, res.missingFromIm,
-      '✓ Every long-lead part with a Part No is present in the Item Master.'
+      '✓ Every long-lead part with a Part No is present in the Item Master.',
+      'lldboMissing'
     ));
     sections.appendChild(lldboSectionFor(
       'Quantity mismatches',
       'The long-lead quantity (summed across all LLDBO rows for that part) should equal the Item Master\'s rolled-up total.',
       LLDBO_QTY_COLS, res.qtyMismatches,
-      '✓ Quantities agree for every part found in both.'
+      '✓ Quantities agree for every part found in both.',
+      'lldboQty'
     ));
     renderDashboard();
   }
@@ -985,6 +1139,7 @@
     const sections = $('material-sections');
     sections.innerHTML = '';
     if (!res) return;
+    rebuildFindings(); // rows below are decorated against it
 
     if (res.applicable) {
       sections.appendChild(lldboSectionFor(
@@ -992,7 +1147,8 @@
         'Compares CAD material (' + (res.cadSourceFileName ? '"' + res.cadSourceFileName + '"' : 'the flat Vault export') +
           ') against the Item Master, for manufactured (non-purchased) parts. Naming-convention differences (e.g. "1.4301" vs "AISI 304") are normalized and not flagged; a genuine grade difference (e.g. 304 vs 304L) is.',
         MATERIAL_MISMATCH_COLS, res.mismatches,
-        '✓ CAD and Item Master materials agree for every shared manufactured part.'
+        '✓ CAD and Item Master materials agree for every shared manufactured part.',
+        'material'
       ));
     } else {
       const note = document.createElement('div');
@@ -1058,6 +1214,7 @@
     const sections = $('revision-sections');
     sections.innerHTML = '';
     if (!res) return;
+    rebuildFindings(); // rows below are decorated against it
 
     if (res.applicable) {
       sections.appendChild(lldboSectionFor(
@@ -1065,7 +1222,8 @@
         'Compares CAD revision (' + (res.cadSourceFileName ? '"' + res.cadSourceFileName + '"' : 'the loaded CAD source') +
           ') against the Item Master, for every shared part. Revision values are compared directly (not normalized) — any difference is a genuine finding.',
         REVISION_MISMATCH_COLS, res.mismatches,
-        '✓ CAD and Item Master revisions agree for every shared part.'
+        '✓ CAD and Item Master revisions agree for every shared part.',
+        'revision'
       ));
     } else {
       const note = document.createElement('div');
@@ -1151,6 +1309,7 @@
   function renderResults() {
     const res = state.result;
     if (!res) { renderDashboard(); return; }
+    rebuildFindings(); // the qty / in-Item-Master-only rows are decorated against it
     setSourceLine($('results-source'));
 
     // summary cards
@@ -1185,14 +1344,31 @@
     $('count-missing').textContent = res.actionableCount;
     $('count-ref').textContent = res.referenceRoots === null ? '' : res.referenceRoots.length;
     $('count-qty').textContent = res.qtyMismatches === null ? '—' : res.qtyMismatches.length;
-    $('count-imonly').textContent = res.imOnly.length;
+    $('count-imonly').textContent = res.imOnlyRoots ? res.imOnlyRoots.length : res.imOnly.length;
 
     renderMissingTab();
     renderRefTab();
     renderQtyTab();
     renderImOnlyTab();
+    // The Item Master / material / revision sections were rendered when their
+    // files loaded — before any comparison existed — so their rows were
+    // decorated against a registry that didn't yet know about missing/qty
+    // findings. Re-render them now that it does. Guarded because these
+    // renderers each call renderDashboard() on the way out.
+    if (!reRendering) {
+      reRendering = true;
+      try {
+        if (state.imQc) renderImQc();
+        if (state.materialResult) renderMaterialPanel();
+        if (state.revisionResult) renderRevisionPanel();
+        if (state.lldboResult) renderLldboPanel();
+      } finally {
+        reRendering = false;
+      }
+    }
     renderDashboard();
   }
+  let reRendering = false;
 
   /* ----- tree tables (missing + reference tabs) ----- */
 
@@ -1289,22 +1465,7 @@
     table.appendChild(tbody);
     pane.appendChild(table);
 
-    // expand/collapse behaviour
-    tbody.addEventListener('click', function (ev) {
-      const exp = ev.target.closest('.expander');
-      if (!exp) return;
-      const id = exp.dataset.for;
-      const expanded = exp.textContent === '▾';
-      if (expanded) {
-        exp.textContent = '▸';
-        hideDescendants(tbody, id);
-      } else {
-        exp.textContent = '▾';
-        tbody.querySelectorAll('tr[data-parent="' + id + '"]').forEach(function (tr) {
-          tr.classList.remove('hidden-row');
-        });
-      }
-    });
+    wireExpanders(tbody);
   }
 
   function renderMissingTab() {
@@ -1362,6 +1523,26 @@
     });
   }
 
+  // Expand/collapse for any container holding rows tagged with
+  // data-id / data-parent and an .expander cell (renderTree's tbody, and the
+  // "In Item Master only" tree).
+  function wireExpanders(container) {
+    container.addEventListener('click', function (ev) {
+      const exp = ev.target.closest('.expander');
+      if (!exp) return;
+      const id = exp.dataset.for;
+      if (exp.textContent === '▾') {
+        exp.textContent = '▸';
+        hideDescendants(container, id);
+      } else {
+        exp.textContent = '▾';
+        container.querySelectorAll('tr[data-parent="' + id + '"]').forEach(function (tr) {
+          tr.classList.remove('hidden-row');
+        });
+      }
+    });
+  }
+
   function nodeTreeMatches(node) {
     if (matchesFilter([node.item.number, node.item.title, node.item.description])) return true;
     return node.children.some(nodeTreeMatches);
@@ -1414,6 +1595,7 @@
       tdNum.className = 'num-cell';
       tdNum.textContent = m.number;
       tr.appendChild(tdNum);
+      decorateSecondary(tr, 'qty', m.number, tdNum);
       if (cols.title) addTd(tr, m.title);
       if (cols.description) addTd(tr, m.description);
       addTd(tr, fmtQty(m.cadQty));
@@ -1472,21 +1654,25 @@
 
   /* ----- IM-only tab ----- */
 
+  // Rendered as a tree over the Item Master's own hierarchy: when a whole
+  // subassembly is absent from the CAD BOM, every part under it is flagged, so
+  // the children are grouped under the parent (collapsed) rather than listed as
+  // hundreds of separate findings. Falls back to a flat list for results built
+  // before imOnlyRoots existed, or when the export has no Row Order column.
   function renderImOnlyTab() {
     const pane = $('pane-imonly');
     const res = state.result;
     pane.innerHTML = '';
-    const rows = res.imOnly.filter(function (r) {
-      return matchesFilter([r.number, r.title, r.description]);
-    });
-    if (!rows.length) {
-      pane.innerHTML = '<div class="empty-state">' + (state.filter ? 'Nothing matches the filter.' : 'Every Item Master entry also appears in the CAD BOM.') + '</div>';
+    const roots = res.imOnlyRoots || (res.imOnly || []).map(function (r) { return { item: r, children: [] }; });
+    if (!roots.length) {
+      pane.innerHTML = '<div class="empty-state">Every Item Master entry also appears in the CAD BOM.</div>';
       return;
     }
     const cols = visibleCols();
     const table = document.createElement('table');
     table.className = 'results-table';
     const htr = document.createElement('tr');
+    addTh(htr, '');
     addTh(htr, 'Part Number');
     if (cols.title) addTh(htr, 'Title');
     if (cols.description) addTh(htr, 'Description');
@@ -1496,12 +1682,46 @@
     addTh(htr, 'Parent Number');
     addTh(htr, 'Parent Title');
     table.appendChild(htr);
-    for (const r of rows) {
+
+    let uid = 0;
+    let anyShown = false;
+    const renderNode = function (node, depth, parentId) {
+      const r = node.item;
+      if (state.filter && !imOnlyTreeMatches(node)) return;
+      const id = 'io' + (uid++);
+      anyShown = true;
       const tr = document.createElement('tr');
+      tr.dataset.id = id;
+      if (depth > 0) {
+        tr.className = 'row-child';
+        tr.dataset.parent = parentId;
+        if (!state.filter) tr.classList.add('hidden-row');
+      }
+      const tdExp = document.createElement('td');
+      if (node.children && node.children.length) {
+        const exp = document.createElement('span');
+        exp.className = 'expander';
+        exp.textContent = state.filter ? '▾' : '▸';
+        exp.dataset.for = id;
+        tdExp.appendChild(exp);
+      }
+      tr.appendChild(tdExp);
       const tdNum = document.createElement('td');
       tdNum.className = 'num-cell';
-      tdNum.textContent = r.number;
+      const indent = document.createElement('span');
+      indent.className = 'indent';
+      indent.style.width = (depth * 14) + 'px';
+      tdNum.appendChild(indent);
+      tdNum.appendChild(document.createTextNode(r.number));
+      if (node.children && node.children.length) {
+        const badge = document.createElement('span');
+        badge.className = 'badge grouped';
+        badge.textContent = '+' + BC.countDescendants(node) + ' children grouped';
+        tdNum.appendChild(document.createTextNode(' '));
+        tdNum.appendChild(badge);
+      }
       tr.appendChild(tdNum);
+      if (depth === 0) decorateSecondary(tr, 'imOnly', r.number, tdNum);
       if (cols.title) addTd(tr, r.title);
       if (cols.description) addTd(tr, r.description);
       if (cols.qty) addTd(tr, fmtQty(r.qty));
@@ -1510,8 +1730,22 @@
       addTd(tr, r.parentNumber || '');
       addTd(tr, r.parentTitle || '');
       table.appendChild(tr);
+      for (const c of node.children || []) renderNode(c, depth + 1, id);
+    };
+    for (const n of roots) renderNode(n, 0, null);
+
+    if (!anyShown) {
+      pane.innerHTML = '<div class="empty-state">Nothing matches the filter.</div>';
+      return;
     }
     pane.appendChild(table);
+    wireExpanders(table);
+  }
+
+  function imOnlyTreeMatches(node) {
+    const r = node.item;
+    if (matchesFilter([r.number, r.title, r.description])) return true;
+    return (node.children || []).some(imOnlyTreeMatches);
   }
 
   /* ----- shared helpers ----- */
@@ -1583,9 +1817,17 @@
       ['Missing incl. grouped children', res.missingTotal],
       ['Reference components', res.referenceRoots === null ? 'n/a (needs PDF + Inventor export together)' : res.referenceTotal],
       ['Quantity mismatches', res.qtyMismatches === null ? 'n/a (no CAD source has quantities)' : res.qtyMismatches.length],
-      ['In Item Master only', res.imOnly.length],
+      ['In Item Master only', res.imOnly.length + (res.imOnlyRoots ? ' (' + res.imOnlyRoots.length + ' incl. grouping)' : '')],
     ];
+    if (state.findings) {
+      summary.push(['Unique parts needing attention', state.findings.counts.actionable]);
+      summary.push(['…plus grouped under a flagged parent', state.findings.counts.grouped]);
+    }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), 'Summary');
+
+    if (state.findings) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(attentionSheetRows(state.findings)), 'Parts needing attention');
+    }
 
     const missing = [['Action needed', 'Parent Number', 'Parent Title', 'Level', 'Part Number', 'Title', 'Description', 'Type', 'File', 'Material', 'CAD Row #']];
     const walk = function (node, depth, rootNumber, rootTitle) {
@@ -1647,8 +1889,24 @@
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qty), 'Qty mismatches');
 
-    const imonly = [['Part Number', 'Title', 'Description', 'Qty', 'Row type', 'Row #', 'Parent Number', 'Parent Title']];
-    for (const r of res.imOnly) imonly.push([r.number, r.title, r.description, r.qty, r.rowType || '', r.sourceRow || '', r.parentNumber || '', r.parentTitle || '']);
+    // Grouped-under column mirrors the Missing sheet's "grouped" marker so a
+    // whole subassembly absent from the CAD BOM reads as one finding.
+    const groupedUnder = new Map();
+    if (res.imOnlyRoots) {
+      const walkIo = function (node, rootNumber) {
+        for (const c of node.children || []) {
+          groupedUnder.set(BC.normNumber(c.item.number), rootNumber);
+          walkIo(c, rootNumber);
+        }
+      };
+      for (const n of res.imOnlyRoots) walkIo(n, n.item.number);
+    }
+    const imonly = [['Action needed', 'Grouped under', 'Part Number', 'Title', 'Description', 'Qty', 'Row type', 'Row #', 'Parent Number', 'Parent Title']];
+    for (const r of res.imOnly) {
+      const under = groupedUnder.get(BC.normNumber(r.number)) || '';
+      imonly.push([under ? 'grouped (parent also absent)' : 'YES', under,
+        r.number, r.title, r.description, r.qty, r.rowType || '', r.sourceRow || '', r.parentNumber || '', r.parentTitle || '']);
+    }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(imonly), 'In Item Master only');
 
     if (state.imQc) {
