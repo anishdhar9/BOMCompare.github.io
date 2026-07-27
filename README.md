@@ -274,10 +274,14 @@ rather than assuming it from the file format. A raw string comparison is unusabl
 manufactured part numbers in a real sample, 38 "differ" as plain text and every one of them
 is a naming-convention variant of the same material (`1.4301` = `AISI 304`, DIN vs AISI
 grade designation; `AISI 316L` vs `AISI 316 L`, spacing only; `SS316L` vs `AISI316L`,
-abbreviation; `Silikon` vs `Silikon/weiß/60°Shore`, CAD simply carrying more descriptive
-detail; `Silicon`/`Silikon` and `Borosilicate`/`Borosilikat`, English/German spelling) — not
-real errors. The check normalizes before comparing (case/spacing, a DIN↔AISI grade lookup,
-one value being a more detailed qualifier of the other) but deliberately keeps a grade's
+abbreviation; `A2`/`A4` vs `AISI 304`/`AISI 316`, ISO 3506 fastener-grade designation;
+`Silikon` vs `Silikon/weiß/60°Shore`, CAD simply carrying more descriptive
+detail; `Silicon`/`Silikon` and `Borosilicate`/`Borosilikat`, English/German spelling;
+`Silikon/transparent` vs `Silikon transparent` or `St-37` vs `St 37`, separator character
+only; `PTFE/weiß` vs `PTFE weiss`, German eszett vs ASCII transliteration) — not
+real errors. The check normalizes before comparing (case/spacing/separator punctuation,
+a DIN↔AISI↔ISO grade lookup, German-character transliteration, one value being a more
+detailed qualifier of the other) but deliberately keeps a grade's
 L-suffix significant (`304` vs `304L`, `316` vs `316L` stay flagged as genuinely different),
 since that can be a real weldability/corrosion spec choice, not just formatting. On that same
 sample this reduces the 38 false positives to 7 real, worth-reviewing differences.

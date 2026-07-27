@@ -32,19 +32,40 @@
 })(typeof self !== 'undefined' ? self : this, function (imQc) {
   'use strict';
 
+  // Same substance, different-language spelling of special characters --
+  // German origin data carries these (ss/eszett, umlauts); JS's toUpperCase()
+  // does not transliterate 'ß' to 'SS' on its own.
+  function transliterateGerman(s) {
+    return s.replace(/Ä/g, 'AE').replace(/Ö/g, 'OE').replace(/Ü/g, 'UE').replace(/ß/g, 'SS');
+  }
+
   function stripFormatting(s) {
-    return String(s || '').toUpperCase().replace(/\s+/g, '');
+    var t = String(s || '').toUpperCase();
+    // ISO 3506 fastener property class suffix (A2-70, A4-80, ...) -- strip
+    // before the generic separator strip below so "A2-70" normalizes to the
+    // grade token "A2" rather than colliding with the digit-continuation
+    // guard in extractGradeToken. Anchored to A2/A4 specifically so unrelated
+    // hyphenated text (e.g. "St-37") is untouched here and falls through to
+    // the generic strip instead.
+    t = t.replace(/\bA([24])-(\d{2})\b/g, 'A$1');
+    t = transliterateGerman(t);
+    // Separator characters that vary between exports for the same material
+    // ("Silikon/transparent" vs "Silikon transparent", "St-37" vs "St 37")
+    // carry no meaning here, so they're removed rather than just whitespace.
+    return t.replace(/[\s\-\/,]+/g, '');
   }
 
   // DIN/EN Werkstoffnummer <-> AISI/UNS grade equivalence for the stainless
   // designations actually seen in this organization's data. 304 and 304L
   // (low-carbon variant), 316 and 316L, are kept as DISTINCT groups on
   // purpose (see file header) -- verified request not to silently equate
-  // an L-suffix difference.
+  // an L-suffix difference. A2/A4 are the ISO 3506 fastener-grade
+  // designations for the same underlying stock (A2 ~= 18-8/304, A4 ~= 316),
+  // confirmed against real fastener rows carrying "A2-70"/"A4-70" materials.
   var GRADE_GROUPS = [
-    ['AISI304', '1.4301', 'SS304', '304'],
+    ['AISI304', '1.4301', 'SS304', '304', 'A2'],
     ['AISI304L', '1.4306', '1.4307', 'SS304L', '304L'],
-    ['AISI316', '1.4401', 'SS316', '316'],
+    ['AISI316', '1.4401', 'SS316', '316', 'A4'],
     ['AISI316L', '1.4404', 'SS316L', '316L'],
     ['AISI316TI', '1.4571', 'SS316TI', '316TI'],
   ];

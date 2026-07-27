@@ -889,6 +889,19 @@ console.log('\n== synthetic: material normalization (materialsMatch) ==');
   check('genuinely different materials stay flagged', M('Aluminium', 'AISI 304') === false);
   check('blank never matches', M('', 'AISI 304') === false && M('AISI 304', '') === false);
   check('placeholder "." never matches', M('.', 'AISI 316 L') === false);
+  // separator-only variants (real false positives reported against the app)
+  check('slash vs space separator: Silikon/transparent == Silikon transparent', M('Silikon/transparent', 'Silikon transparent') === true);
+  check('hyphen vs space separator: St-37 == St 37', M('St-37', 'St 37') === true);
+  check('German eszett vs ascii: PTFE/weiß == PTFE weiss', M('PTFE/weiß', 'PTFE weiss') === true);
+  check('eszett + qualifier-detail containment: PTFE/weiß == PTFE-weiß/Edelstahl', M('PTFE/weiß', 'PTFE-weiß/Edelstahl') === true);
+  // ISO 3506 fastener grades A2/A4 as synonyms of AISI 304/316
+  check('fastener grade match: A2 == AISI 304', M('A2', 'AISI 304') === true);
+  check('fastener grade + property class match: A4-70 == AISI 316', M('A4-70', 'AISI 316') === true);
+  check('fastener grade + property class match: A2-70 == 1.4301', M('A2-70', '1.4301') === true);
+  // regressions: A2/A4 additions must not blur the still-distinct grades
+  check('304 vs 316L stays flagged (not equated)', M('AISI 304', 'AISI 316 L') === false);
+  check('316L vs 316 stays flagged (not equated)', M('AISI 316L', 'AISI 316') === false);
+  check('unrelated materials with no separator overlap stay flagged', M('Brass, Soft Yellow', 'Gun Metal') === false);
 }
 
 console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-out parts ==');
