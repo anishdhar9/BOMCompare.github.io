@@ -111,6 +111,63 @@ console.log('\n== synthetic: Qty mismatch breakdown carries Item Master Row # ==
     mismatch.imBreakdown);
 }
 
+console.log('\n== synthetic: quantity-cascade detection (detectQuantityCascades) ==');
+{
+  // ASSY-P: all 5 direct children released at a clean 2x in the Item Master
+  // -> one cascade finding. ASSY-Q: a single unrelated mismatched child
+  // (below the 2-child minimum) -> stays an ordinary qty mismatch, not a
+  // cascade.
+  const cadAoa = [
+    ['Item', 'Number', 'Title', 'QTY'],
+    ['1', 'MACH-01', 'Machine', '1'],
+    ['1.1', 'ASSY-P', 'Assembly P', '1'],
+    ['1.1.1', 'CHILD-1', 'Child 1', '1'],
+    ['1.1.2', 'CHILD-2', 'Child 2', '1'],
+    ['1.1.3', 'CHILD-3', 'Child 3', '1'],
+    ['1.1.4', 'CHILD-4', 'Child 4', '1'],
+    ['1.1.5', 'CHILD-5', 'Child 5', '1'],
+    ['1.2', 'ASSY-Q', 'Assembly Q', '1'],
+    ['1.2.1', 'CHILD-X', 'Child X', '1'],
+  ];
+  const cad = cadLeveledParser.parse(cadAoa, { source: 'leveled-sheet' });
+
+  const imAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity'],
+    ['MACH-01', '-', 'Machine', 'desc', '-'],
+    ['ASSY-P', '1', 'Assembly P', 'desc', '1 Each'],
+    ['CHILD-1', '1.1', 'Child 1', 'desc', '2 Each'],
+    ['CHILD-2', '1.2', 'Child 2', 'desc', '2 Each'],
+    ['CHILD-3', '1.3', 'Child 3', 'desc', '2 Each'],
+    ['CHILD-4', '1.4', 'Child 4', 'desc', '2 Each'],
+    ['CHILD-5', '1.5', 'Child 5', 'desc', '2 Each'],
+    ['ASSY-Q', '2', 'Assembly Q', 'desc', '1 Each'],
+    ['CHILD-X', '2.1', 'Child X', 'desc', '3 Each'],
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => imAoa },
+  });
+
+  const res = compare(cad, im);
+  check('qtyCascades applicable', res.qtyCascades.applicable === true);
+  check('exactly one cascade root (ASSY-P)', res.qtyCascades.roots.length === 1,
+    res.qtyCascades.roots.map(r => r.item.number));
+  const root = res.qtyCascades.roots[0];
+  check('cascade root is ASSY-P', root.item.number === 'ASSY-P', root.item.number);
+  check('cascade ratio is 2', root.item.cascadeRatio === 2, root.item.cascadeRatio);
+  check('cascade counts 5 of 5 children mismatched', root.item.cascadeChildCount === 5 &&
+    root.item.cascadeMismatchedChildCount === 5, root.item);
+  check('cascade subtree has all 5 children, no deeper nesting', countDescendants(root) === 5,
+    countDescendants(root));
+  check('CHILD-X (single unrelated mismatch) is not part of any cascade', !res.qtyCascades.roots.some(r =>
+    (function contains(n) { return n.item.number === 'CHILD-X' || n.children.some(contains); })(r)));
+  check('CHILD-X still reported as an ordinary qty mismatch (1 vs 3)',
+    res.qtyMismatches.some(m => m.number === 'CHILD-X' && m.cadQty === 1 && m.imQty === 3),
+    res.qtyMismatches.map(m => m.number));
+  check('CHILD-1..5 also still reported as ordinary rolled-up qty mismatches (1 vs 2)',
+    ['CHILD-1', 'CHILD-2', 'CHILD-3', 'CHILD-4', 'CHILD-5'].every(n =>
+      res.qtyMismatches.some(m => m.number === n && m.cadQty === 1 && m.imQty === 2)));
+}
+
 console.log('\n== synthetic: leveled CAD parsing captures Material column ==');
 {
   const aoaWithMaterial = [
@@ -709,6 +766,39 @@ console.log('\n== synthetic: findings registry (one primary finding per part) ==
   check('the grouped child records which parent explains it',
     treeReg.byPn.get('CHILD-1').grouped === true && treeReg.byPn.get('CHILD-1').groupedUnder === 'ASSY-1', treeReg.byPn.get('CHILD-1'));
   check('the root itself is not marked grouped', treeReg.byPn.get('ASSY-1').grouped === false);
+
+  // A quantity cascade should outrank the ordinary per-part qty finding it
+  // explains: the cascade root becomes the one actionable finding, and its
+  // descendants (including one that ALSO independently shows up in the flat
+  // qtyMismatches list) are demoted/grouped under it instead of competing.
+  const cascadeReg = findings.buildRegistry({
+    result: {
+      missingRoots: [], referenceRoots: null, imOnly: [],
+      qtyMismatches: [{ number: 'CHILD-A', title: 'A', description: '', cadQty: 1, imQty: 2, cadBreakdown: [], imBreakdown: [] }],
+      qtyCascades: {
+        applicable: true,
+        roots: [{
+          item: { number: 'ASSY-CASCADE', title: 'Cascade Assy', cascadeRatio: 2, cascadeChildCount: 3, cascadeMismatchedChildCount: 3 },
+          children: [
+            { item: { number: 'CHILD-A', title: 'A' }, children: [] },
+            { item: { number: 'CHILD-B', title: 'B' }, children: [] },
+            { item: { number: 'CHILD-C', title: 'C' }, children: [] },
+          ],
+        }],
+      },
+    },
+  });
+  const cascadeRootPart = cascadeReg.byPn.get('ASSY-CASCADE');
+  check('the cascade root is its own actionable finding, not grouped',
+    !!cascadeRootPart && cascadeRootPart.primary.key === 'qtyCascade' && cascadeRootPart.grouped === false, cascadeRootPart);
+  check('the cascade root detail names the ratio and child counts', /3 of 3/.test(cascadeRootPart.primary.detail) &&
+    /2×/.test(cascadeRootPart.primary.detail), cascadeRootPart.primary.detail);
+  check('CHILD-A is owned by the cascade (sev 85), not the plain qty finding (sev 80)',
+    cascadeReg.byPn.get('CHILD-A').primary.key === 'qtyCascade', cascadeReg.byPn.get('CHILD-A'));
+  check('CHILD-A\'s own qty finding is still recorded, just demoted',
+    cascadeReg.isSecondary('qty', 'CHILD-A') === true);
+  check('CHILD-B/CHILD-C (grouped, no independent qty finding) are still registered and grouped',
+    cascadeReg.byPn.get('CHILD-B').grouped === true && cascadeReg.byPn.get('CHILD-C').grouped === true);
 }
 
 console.log('\n== synthetic: "In Item Master only" parent rollup (groupImOnly) ==');
@@ -946,7 +1036,7 @@ console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-o
 
 /* ---------------- real-sample baseline tests ---------------- */
 
-const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath, invBomPath, imBomMatPath, pdf726Path] = process.argv.slice(2);
+const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath, invBomPath, imBomMatPath, pdf726Path, invBom22819Path, imBom22819Path] = process.argv.slice(2);
 let pdfjsLib = null;
 try { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); } catch (e) { /* npm install to enable PDF tests */ }
 
@@ -1331,6 +1421,33 @@ if (invBomPath && imBomMatPath) {
   }
 } else if (invBomPath || imBomMatPath) {
   console.log('\n(the Inventor BOM material test needs both the Inventor BOM export and its Item Master path)');
+}
+
+if (invBom22819Path && imBom22819Path) {
+  console.log('\n== real samples: PN22819 quantity-cascade regression (Housing subtree released at 2x) ==');
+  const invWb = XLSX.read(fs.readFileSync(invBom22819Path), { type: 'buffer' });
+  const invRes = detect.parseCadFromWorkbook(invWb, XLSX);
+  const invCad = invRes && invRes.ok;
+  check('PN22819 Inventor BOM export parsed as leveled sheet', !!(invCad && invCad.source === 'leveled-sheet'), invCad && invCad.source);
+
+  const imWb = XLSX.read(fs.readFileSync(imBom22819Path), { type: 'buffer' });
+  const im22819 = detect.parseItemMasterFromWorkbook(imWb, XLSX);
+  check('PN22819 Item Master parsed', !!im22819 && im22819.rows.length > 0, im22819 && im22819.rows.length);
+
+  const res22819 = compareAll([invCad], im22819);
+  check('380 flat quantity mismatches (unchanged — the flat list is untouched by cascade detection)',
+    res22819.qtyMismatches.length === 380, res22819.qtyMismatches.length);
+  check('exactly one quantity cascade found', res22819.qtyCascades.applicable === true &&
+    res22819.qtyCascades.roots.length === 1, res22819.qtyCascades.roots.map(r => r.item.number));
+  const cascadeRoot = res22819.qtyCascades.roots[0];
+  check('cascade root is the Housing assembly (7-705-23863), all 92 direct children at a clean 2x',
+    cascadeRoot.item.number === '7-705-23863' && cascadeRoot.item.cascadeRatio === 2 &&
+    cascadeRoot.item.cascadeChildCount === 92 && cascadeRoot.item.cascadeMismatchedChildCount === 92,
+    cascadeRoot.item);
+  check('cascade subtree covers a large share of the flat mismatch list (>= 300 descendants)',
+    countDescendants(cascadeRoot) >= 300, countDescendants(cascadeRoot));
+} else if (invBom22819Path || imBom22819Path) {
+  console.log('\n(the PN22819 cascade regression needs both the Inventor BOM export and its Item Master path)');
 }
 
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nall tests passed');

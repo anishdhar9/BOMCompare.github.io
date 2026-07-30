@@ -769,6 +769,11 @@
       tiles.push({ num: res.qtyMismatches === null ? '—' : res.qtyMismatches.length, label: 'Quantity mismatches',
         cls: res.qtyMismatches === null ? 'na' : (res.qtyMismatches.length ? 'amber' : 'pass'),
         onClick: function () { jumpTo('results', 'qty'); } });
+      if (res.qtyCascades.applicable) {
+        tiles.push({ num: res.qtyCascades.roots.length, label: 'Quantity cascades',
+          sub: res.qtyCascades.roots.length ? 'one root cause explains many mismatches — fix it first' : 'no uniform-ratio subtree found ✓',
+          cls: res.qtyCascades.roots.length ? 'red' : 'pass', onClick: function () { jumpTo('results', 'cascade'); } });
+      }
     }
 
     const mat = state.materialResult;
@@ -1391,11 +1396,13 @@
     $('count-missing').textContent = res.actionableCount;
     $('count-ref').textContent = res.referenceRoots === null ? '' : res.referenceRoots.length;
     $('count-qty').textContent = res.qtyMismatches === null ? '—' : res.qtyMismatches.length;
+    $('count-cascade').textContent = res.qtyCascades.applicable ? res.qtyCascades.roots.length : '—';
     $('count-imonly').textContent = res.imOnlyRoots ? res.imOnlyRoots.length : res.imOnly.length;
 
     renderMissingTab();
     renderRefTab();
     renderQtyTab();
+    renderCascadeTab();
     renderImOnlyTab();
     // The Item Master / material / revision sections were rendered when their
     // files loaded — before any comparison existed — so their rows were
@@ -1699,6 +1706,102 @@
     return box;
   }
 
+  /* ----- quantity-cascade tab ----- */
+
+  // A quantity cascade is a whole Item Master subtree released at one clean,
+  // uniform ratio of its CAD-required quantity — one root-cause error that
+  // would otherwise flood the plain "Quantity mismatches" tab with every
+  // descendant it explains. Rendered as a tree over the same Item Master
+  // hierarchy renderImOnlyTab uses, since qtyCascades.roots share that shape.
+  function renderCascadeTab() {
+    const pane = $('pane-cascade');
+    const res = state.result;
+    pane.innerHTML = '';
+    if (!res.qtyCascades.applicable) {
+      pane.innerHTML = '<div class="empty-state">Quantity-cascade detection is unavailable: it needs a leveled CAD ' +
+        'source with quantities (the Inventor BOM export) — the same requirement as "Quantity mismatches".</div>';
+      return;
+    }
+    const intro = document.createElement('p');
+    intro.className = 'pane-intro';
+    intro.textContent = 'A whole assembly whose direct children are ALL released at the same clean multiple of their ' +
+      'CAD quantity (e.g. every child at exactly 2x) usually traces to one data-entry error, not many. Fix the one ' +
+      'root cause below and most of the "Quantity mismatches" tab should clear with it.';
+    pane.appendChild(intro);
+    const roots = res.qtyCascades.roots;
+    if (!roots.length) {
+      const d = document.createElement('div');
+      d.className = 'empty-state';
+      d.textContent = 'No quantity cascades found — no assembly has its whole set of children released at one uniform ratio.';
+      pane.appendChild(d);
+      return;
+    }
+    const cols = visibleCols();
+    const table = document.createElement('table');
+    table.className = 'results-table';
+    const htr = document.createElement('tr');
+    addTh(htr, '');
+    addTh(htr, 'Part Number');
+    if (cols.title) addTh(htr, 'Title');
+    if (cols.row) addTh(htr, 'Row #');
+    table.appendChild(htr);
+
+    let uid = 0;
+    const renderNode = function (node, depth, parentId) {
+      const r = node.item;
+      if (state.filter && !imOnlyTreeMatches(node)) return;
+      const id = 'ca' + (uid++);
+      const tr = document.createElement('tr');
+      tr.dataset.id = id;
+      if (depth > 0) {
+        tr.className = 'row-child';
+        tr.dataset.parent = parentId;
+        if (!state.filter) tr.classList.add('hidden-row');
+      } else {
+        tr.className = 'row-cascade';
+      }
+      const tdExp = document.createElement('td');
+      if (node.children && node.children.length) {
+        const exp = document.createElement('span');
+        exp.className = 'expander';
+        exp.textContent = state.filter ? '▾' : '▸';
+        exp.dataset.for = id;
+        tdExp.appendChild(exp);
+      }
+      tr.appendChild(tdExp);
+      const tdNum = document.createElement('td');
+      tdNum.className = 'num-cell';
+      const indent = document.createElement('span');
+      indent.className = 'indent';
+      indent.style.width = (depth * 14) + 'px';
+      tdNum.appendChild(indent);
+      tdNum.appendChild(document.createTextNode(r.number));
+      if (depth === 0) {
+        const ratio = document.createElement('span');
+        ratio.className = 'badge red';
+        ratio.textContent = r.cascadeMismatchedChildCount + ' of ' + r.cascadeChildCount + ' children at ' + r.cascadeRatio + '×';
+        tdNum.appendChild(document.createTextNode(' '));
+        tdNum.appendChild(ratio);
+      }
+      if (node.children && node.children.length) {
+        const badge = document.createElement('span');
+        badge.className = 'badge grouped';
+        badge.textContent = '+' + BC.countDescendants(node) + ' descendants grouped';
+        tdNum.appendChild(document.createTextNode(' '));
+        tdNum.appendChild(badge);
+      }
+      tr.appendChild(tdNum);
+      if (depth === 0) decorateSecondary(tr, 'qtyCascade', r.number, tdNum);
+      if (cols.title) addTd(tr, r.title);
+      if (cols.row) addTd(tr, r.sourceRow || '');
+      table.appendChild(tr);
+      for (const c of node.children || []) renderNode(c, depth + 1, id);
+    };
+    for (const n of roots) renderNode(n, 0, null);
+    pane.appendChild(table);
+    wireExpanders(table);
+  }
+
   /* ----- IM-only tab ----- */
 
   // Rendered as a tree over the Item Master's own hierarchy: when a whole
@@ -1819,7 +1922,7 @@
   function switchTab(name) {
     state.activeTab = name;
     document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === name); });
-    ['missing', 'ref', 'qty', 'imonly'].forEach(function (n) {
+    ['missing', 'ref', 'qty', 'cascade', 'imonly'].forEach(function (n) {
       $('pane-' + n).classList.toggle('hidden', n !== name);
     });
   }
@@ -1864,6 +1967,7 @@
       ['Missing incl. grouped children', res.missingTotal],
       ['Reference components', res.referenceRoots === null ? 'n/a (needs PDF + Inventor export together)' : res.referenceTotal],
       ['Quantity mismatches', res.qtyMismatches === null ? 'n/a (no CAD source has quantities)' : res.qtyMismatches.length],
+      ['Quantity cascades', res.qtyCascades.applicable ? res.qtyCascades.roots.length : 'n/a (no CAD source has quantities)'],
       ['In Item Master only', res.imOnly.length + (res.imOnlyRoots ? ' (' + res.imOnlyRoots.length + ' incl. grouping)' : '')],
     ];
     if (state.findings) {
@@ -1935,6 +2039,25 @@
       qty.push(['n/a — the CAD BOM source has no quantity column']);
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qty), 'Qty mismatches');
+
+    const cascades = [['Action needed', 'Cascade ratio', 'Children at ratio', 'Grouped under', 'Part Number', 'Title', 'Row #']];
+    const walkCascade = function (node, depth, rootNumber) {
+      const it = node.item;
+      cascades.push([
+        depth === 0 ? 'YES — fix this root cause' : 'grouped (explained by cascade above)',
+        depth === 0 ? it.cascadeRatio + '×' : '',
+        depth === 0 ? it.cascadeMismatchedChildCount + ' of ' + it.cascadeChildCount : '',
+        depth === 0 ? '' : rootNumber,
+        it.number, it.title, it.sourceRow || '',
+      ]);
+      for (const c of node.children || []) walkCascade(c, depth + 1, rootNumber);
+    };
+    if (res.qtyCascades.applicable) {
+      for (const n of res.qtyCascades.roots) walkCascade(n, 0, n.item.number);
+    } else {
+      cascades.push(['n/a — the CAD BOM source has no quantity column']);
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cascades), 'Quantity cascades');
 
     // Grouped-under column mirrors the Missing sheet's "grouped" marker so a
     // whole subassembly absent from the CAD BOM reads as one finding.

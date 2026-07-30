@@ -151,6 +151,9 @@ two exports of the same BOM traceable and consistent with each other.
   number between the two BOMs (row quantity multiplied by parent assembly quantities,
   summed over every occurrence), and shows a per-parent breakdown. This check needs the
   Inventor BOM export, or any CAD source with a Qty column.
+- **Quantity cascades** (red): a whole Item Master subtree whose direct children are ALL
+  released at one clean, uniform ratio of their CAD quantity — usually one root-cause data
+  error, not many. See "Quantity cascades" below.
 - **Revision mismatches** (amber): the app compares CAD revision directly against the Item
   Master's Revision, for every shared part. See "Revision: CAD vs Item Master" below. This
   check needs a Revision column on both sides.
@@ -183,13 +186,14 @@ Severity order, most serious first:
 | 3 | Missing from Item Master |
 | 4 | Long-lead part missing from Item Master |
 | 5 | Reference item |
-| 6 | Quantity mismatch (CAD vs Item Master) |
-| 7 | Long-lead quantity mismatch |
-| 8 | Revision mismatch vs CAD |
-| 9 | Material mismatch vs CAD |
-| 10 | In Item Master only |
-| 11 | Item Master data-quality checks (Quantity vs Item Qty, Revision consistency, Material, Title/Description, Entity Icon, Producer, End of Line) |
-| 12 | Not yet certified (`New` state), ranked low so it cannot hide a real finding |
+| 6 | Quantity cascade (whole subtree released at one ratio) |
+| 7 | Quantity mismatch (CAD vs Item Master) |
+| 8 | Long-lead quantity mismatch |
+| 9 | Revision mismatch vs CAD |
+| 10 | Material mismatch vs CAD |
+| 11 | In Item Master only |
+| 12 | Item Master data-quality checks (Quantity vs Item Qty, Revision consistency, Material, Title/Description, Entity Icon, Producer, End of Line) |
+| 13 | Not yet certified (`New` state), ranked low so it cannot hide a real finding |
 
 A **Parts needing attention** table sits at the top of the page. It shows one row per part,
 most serious issue first, with every issue found on that part. Click a row to jump to the
@@ -208,6 +212,27 @@ not part of the actionable count. Click "show N grouped" to reveal them.
 Note: the per-occurrence rows inside a quantity mismatch's expander (its `cadBreakdown` and
 `imBreakdown`) are *not* duplicates. They show "where this part is used", and stay as they
 are.
+
+### Quantity cascades
+
+The plain "Quantity mismatches" check compares each part's total ROLLED-UP quantity. It
+cannot see WHERE in the tree a discrepancy starts, so one bad assembly node can surface as
+hundreds of separately-flagged descendants, all with the correct value at their own row but
+the wrong value once their parent's multiplier is applied. Diagnosed on a real machine
+(PN22819): every one of the 92 direct children of one Item Master assembly carried exactly
+2× its CAD-required quantity, and that single error cascaded into 380 flagged rows.
+
+The **Quantity cascades** tab and dashboard tile catch this directly. When ALL of an
+assembly's mismatched direct children share one clean ratio (2×, 4×, 0.5×, and so on), the
+app reports ONE finding for that assembly, with the ratio and child count
+("92 of 92 children at 2×"), instead of flagging every downstream part on its own. Every
+part in the affected subtree is grouped under that one finding — including parts that also
+independently appear in the flat "Quantity mismatches" list — the same demotion the findings
+registry already applies to other checks (see "One finding per part" above). Fix the one
+root-cause row and the rest of the subtree's findings resolve with it.
+
+This needs the same data the plain quantity check needs (a leveled CAD source with
+quantities): it is not a separate optional file.
 
 ## Overview dashboard
 
