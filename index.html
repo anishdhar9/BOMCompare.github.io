@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BOM Compare — CAD BOM vs Item Master</title>
-  <meta name="description" content="Compare a CAD BOM against the Item Master BOM to catch parts that were accidentally left as BOM Reference and would never be ordered.">
+  <title>BOM Compare: CAD BOM vs Item Master</title>
+  <meta name="description" content="Compare a CAD BOM against the Item Master BOM. Find parts that stayed set to BOM Reference by mistake, before they fail to get ordered.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%99%EF%B8%8F%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="css/style.css">
 </head>
@@ -12,15 +12,15 @@
   <header class="app-header">
     <div class="wrap">
       <h1>BOM Compare</h1>
-      <p class="tagline">CAD BOM vs Item Master — find parts stuck in “BOM Reference” before they fail to get ordered.</p>
-      <p class="privacy">🔒 Everything runs in your browser. No file ever leaves your computer.</p>
+      <p class="tagline">CAD BOM vs Item Master. Find parts stuck in “BOM Reference” before they fail to get ordered.</p>
+      <p class="privacy">🔒 Everything runs in your browser. No file leaves your computer.</p>
     </div>
   </header>
 
   <main class="wrap">
     <section class="folder-load" id="folder-load">
       <button type="button" class="btn" id="btn-pick-folder" hidden>📁 Load from folder (PNxxxx)</button>
-      <p class="dz-hint hidden" id="folder-unsupported">📁 Loading directly from a NAS project folder needs Chrome or Edge — drop files manually below instead.</p>
+      <p class="dz-hint hidden" id="folder-unsupported">📁 Loading directly from a NAS project folder needs Chrome or Edge. Drop the files manually below instead.</p>
       <p class="folder-status" id="folder-status"></p>
     </section>
 
@@ -31,7 +31,7 @@
           <div class="dz-icon">📐</div>
           <h2>CAD BOM</h2>
           <p class="dz-hint">Vault multi-level BOM PDF, Inventor BOM export (.xlsx), or the Vault Excel paste.<br>
-            <strong>Tip:</strong> drop the PDF <em>and</em> the Inventor export together to also get the reference-items review list and quantity checks.</p>
+            <strong>Tip:</strong> Drop the PDF <em>and</em> the Inventor export together. This also gives you the reference-items review list and quantity checks.</p>
           <div class="dz-sources" id="cad-sources"></div>
           <p class="dz-error" id="status-error-cad"></p>
           <button type="button" class="btn btn-small" id="pick-cad">Choose file(s)</button>
@@ -58,14 +58,14 @@
         <p class="dash-source" id="dash-source"></p>
       </div>
       <div class="dash-tiles" id="dash-tiles"></div>
-      <p class="dash-hint">Each tile is a flag count — click one to jump to its details below.</p>
+      <p class="dash-hint">Each tile is a flag count. Click one to jump to its details below.</p>
     </section>
 
     <section class="im-qc hidden" id="attention">
       <div class="im-qc-head">
         <div>
           <h2>Parts needing attention</h2>
-          <p class="dz-hint">One row per part, worst issue first. A part flagged by several checks is listed once here and shows every issue found on it — the detail sections below still carry the full per-check breakdown.</p>
+          <p class="dz-hint">One row per part, worst issue first. A part flagged by several checks is listed once here, and shows every issue found on it. The detail sections below still carry the full per-check breakdown.</p>
         </div>
         <span class="qc-pill na" id="attention-count"></span>
       </div>
@@ -77,14 +77,14 @@
         <div>
           <h2>Item Master data quality</h2>
           <p class="source-line" id="qc-source"></p>
-          <p class="dz-hint">Checks the Item Master file by itself — no CAD BOM needed. Catches manual edits in Vault/ERP that don't agree with other fields on the same row (e.g. someone changes Quantity without updating Item Qty).</p>
+          <p class="dz-hint">Checks the Item Master file by itself. No CAD BOM is needed. This catches manual edits in Vault or the ERP system that do not agree with other fields on the same row (for example, someone changes Quantity without updating Item Qty).</p>
         </div>
         <button type="button" class="btn btn-small" id="btn-qc-export">Download QC report</button>
       </div>
       <div class="summary" id="qc-summary"></div>
       <p class="notice warn hidden" id="qc-callout"></p>
       <div id="qc-sections"></div>
-      <p class="dz-hint material-note">Material checks on 7-999-* purchased/catalog parts are excluded from the checks above and from the counts below — review them separately in the Bought-Out Parts panel.</p>
+      <p class="dz-hint material-note">Material checks on 7-999-* purchased or catalog parts are excluded from the checks above, and from the counts below. Review them separately, in the Bought-Out Parts panel.</p>
       <div id="material-sections"></div>
       <div id="revision-sections"></div>
     </section>
@@ -93,7 +93,7 @@
       <div class="im-qc-head">
         <div>
           <h2>Long-Lead Parts (LLDBO) <span class="optional-tag">optional</span></h2>
-          <p class="dz-hint">Long-lead direct-bought-out parts are released to procurement early, ahead of the normal BOM release, to cover supplier lead times. Drop the "PNxxxx_LLDBO" file and, once the Item Master is also loaded, this checks that each one actually made it into the released BOM.</p>
+          <p class="dz-hint">Long-lead direct-bought-out parts are released to procurement early, ahead of the normal BOM release, to cover supplier lead times. Drop the "PNxxxx_LLDBO" file. Once the Item Master is also loaded, this check confirms that each part reached the released BOM.</p>
         </div>
         <button type="button" class="btn btn-small" id="btn-lldbo-export">Download LLDBO check</button>
       </div>
@@ -114,7 +114,7 @@
 
     <section class="mapping hidden" id="mapping-panel">
       <h2>Assign columns</h2>
-      <p>The CAD BOM's columns couldn't be identified automatically. Tell me which column holds each field (only Part Number is required):</p>
+      <p>The app could not identify the CAD BOM's columns automatically. Tell the app which column holds each field. Only Part Number is required.</p>
       <div class="mapping-fields" id="mapping-fields"></div>
       <div class="mapping-preview-scroll">
         <table class="mapping-preview" id="mapping-preview"></table>
@@ -160,30 +160,41 @@
       <details>
         <summary>How it works & assumptions</summary>
         <ul>
-          <li><strong>Overview dashboard:</strong> a panel at the top shows one clickable tile per flag value (findings, quantity/material/revision mismatches, Item Master quality issues), colour-coded, appearing as data loads. Click a tile to jump straight to its details below. Every result — the dashboard and each section — is captioned with the exact source file(s) being compared, so two exports of the same BOM (with different Vault columns enabled) stay traceable.</li>
-          <li><strong>One finding per part:</strong> the same part can legitimately be caught by several checks at once (e.g. it is in the Item Master but not in CAD, <em>and</em> its Quantity and Item Qty disagree). Rather than reporting that as several problems, findings are ranked by severity — missing &gt; reference &gt; quantity &gt; revision &gt; material &gt; in-Item-Master-only &gt; data-quality checks — so each part is owned by its most serious check and every other mention renders muted with an “also in: …” pointer. The <strong>Parts needing attention</strong> table at the top lists each part once with all of its issues.</li>
-          <li><strong>Allied parts:</strong> related parts are rolled up, not repeated. A missing assembly already absorbed its children; “In Item Master only” now does the same over the Item Master's own Row Order hierarchy, so a whole subassembly absent from the CAD BOM is one finding instead of one per part (on a real export, 1033 rows become 11). Grouped children are excluded from the actionable count and revealed with a “show N grouped” toggle. The per-occurrence rows inside a quantity mismatch are kept — they show where the part is used, and aren't duplicates.</li>
-          <li><strong>Match key:</strong> part number (Vault item “Number”), case-insensitive.</li>
-          <li><strong>CAD BOM sources</strong> (upload one or, better, two together):
+          <li><strong>Overview dashboard:</strong> a panel at the top shows one clickable tile per flag value (findings, quantity, material and revision mismatches, and Item Master quality issues). Each tile is color-coded, and tiles appear as data loads. Click a tile to jump straight to its details below. The dashboard and each section always show the exact source file or files being compared. This keeps two exports of the same BOM, with different Vault columns enabled, traceable.</li>
+          <li><strong>One finding per part:</strong> the same part can legitimately be caught by several checks at once. For example, a part can be in the Item Master but not in CAD, <em>and</em> its Quantity and Item Qty can also disagree. The app does not report this as several problems. Instead, it ranks findings by severity: missing, then reference, then quantity, then revision, then material, then in-Item-Master-only, then the data-quality checks. Each part is owned by its most serious check. Every other mention renders muted, with an “also in: …” pointer. The <strong>Parts needing attention</strong> table at the top lists each part once, with all of its issues.</li>
+          <li><strong>Allied parts:</strong> the app rolls up related parts, instead of repeating them. A missing assembly already absorbed its children. “In Item Master only” now does the same, over the Item Master's own Row Order hierarchy. A whole subassembly absent from the CAD BOM is one finding, not one finding per part (on a real export, 1033 rows became 11). Grouped children are not part of the actionable count. Click “show N grouped” to reveal them. The per-occurrence rows inside a quantity mismatch stay as they are. They show where the part is used, and are not duplicates.</li>
+          <li><strong>Match key:</strong> the part number (the Vault item “Number” field), not case-sensitive.</li>
+          <li><strong>CAD BOM sources:</strong> upload one file, or, for best results, two files together.
             <ul>
-              <li><em>Vault multi-level BOM PDF</em> (the web client's “Uses” report) — the full CAD structure <strong>including reference components</strong>; hierarchy from indentation; carries no quantities, but does carry Revision.</li>
-              <li><em>Inventor BOM export</em> (.xlsx with Item / Part Number / QTY / BOM Structure, and — when those columns were included — Material and Revision) — the intended BOM: quantities and virtual components, but reference components are excluded from it.</li>
-              <li><em>Vault Excel paste</em> (flat file listing) — full structure, no hierarchy or quantities; grouping is then inferred from the export's depth-first order plus the Item Master hierarchy.</li>
+              <li><em>Vault multi-level BOM PDF</em> (the web client's “Uses” report): the full CAD structure, <strong>including reference components</strong>. Hierarchy comes from indentation. This file carries no quantities, but it does carry Revision.</li>
+              <li><em>Inventor BOM export</em> (.xlsx with Item, Part Number, QTY, and BOM Structure columns, and Material and Revision when those columns were included): the intended BOM, with quantities and virtual components. Reference components are excluded from it.</li>
+              <li><em>Vault Excel paste</em> (a flat file listing): the full structure, with no hierarchy or quantities. The app infers grouping from the export's depth-first order, plus the Item Master hierarchy.</li>
             </ul>
           </li>
-          <li><strong>Missing from Item Master:</strong> part numbers found in the CAD BOM but absent from the Item Master — the classic symptom of a component accidentally set to <em>BOM Reference</em> in Inventor.</li>
-          <li><strong>Reference assemblies:</strong> when a whole assembly is missing, its child parts are grouped under it and collapsed — a reference assembly's entire BOM is expected to be absent, so only the assembly itself needs action.</li>
-          <li><strong>Reference items</strong> (needs two CAD sources): components in the full CAD structure (PDF or Vault paste) that are absent from the Inventor BOM export — the exact list of what is currently flagged <em>BOM Reference</em> in the model, each marked whether it also made it into the Item Master. Review it to confirm every entry is intentional.</li>
-          <li><strong>Quantity mismatches:</strong> rolled-up total quantity per part (own qty × parent assembly quantities, summed over all occurrences) compared between CAD and Item Master. Requires a source with a QTY column — that's the Inventor BOM export; the Vault PDF and flat paste carry no quantities.</li>
-          <li><strong>In Item Master only:</strong> items whose number never appears in the CAD BOM — stale or manually added entries worth reviewing.</li>
-          <li><strong>Item Master data quality</strong> (runs the moment the Item Master loads, no CAD BOM required): nine checks on the file itself — Producer/Producer Number reflected in the top-level row's Description; the "END OF LINE" entry has the organization's fixed part number and a whole-number Row Order; the Quantity and Item Qty columns agree on every row (catches a manual edit to one that wasn't mirrored to the other — only when the export carries both columns; a per-unit column like "QTY per Unit" is never mistaken for Item Qty); when the export includes an Entity Icon column, that it reads "Normal" everywhere; every row has a Title and Description (purchased/catalog parts, numbered "X-999-…", are only flagged when both are missing); every non-assembly, non-purchased row has a Material; and the same part number used at more than one BOM position carries the same Revision everywhere. A check can pass on its own terms but still turn amber ("OK, but see below") when a related CAD-vs-Item-Master comparison finds a real difference.</li>
-          <li><strong>Sketch parts in the Item Master (7-333-…)</strong> — release-blocking, with its own box. 7-333-… numbers are rough-sketch models: they may exist in CAD, but <em>only ever as Reference</em>. One reaching the released Item Master is a serious release error, so every hit is reported with its Row #, Row Order, immediate parent <em>and the full parent trail</em> (e.g. “ASSY-A (Top Assembly) › SUB-B (Sub Assembly)”) so you can trace exactly how it got in. Only ever flagged in the Item Master — finding them in CAD is expected and is not reported.</li>
-          <li><strong>Item state (obsolete / invalid revisions)</strong> — release-blocking, with its own box. A released BOM should hold Certified items only: <em>Obsolete</em>, <em>Invalid</em> and <em>Phased Out</em> are errors (the part was released against a dead revision), while <em>New</em> is shown as an amber warning rather than a failure, since genuine released exports do contain New rows. Reads the Item Master's “State” column, which is deliberately distinguished from the neighbouring “File Link State” and “State (Historical)” columns — those describe the CAD file link, not the item.</li>
-          <li><strong>Material: CAD vs Item Master</strong> — active once a loaded CAD source actually carries material (the flat Vault paste, or an Inventor BOM export that included the Material column; Vault's exported columns are user-configurable, so this varies by file). Compares material for manufactured parts, normalizing naming-convention differences (DIN vs AISI grade, spacing, abbreviation, language) so only genuine differences are flagged — including a grade's L-suffix (304 vs 304L), which stays significant. Purchased/catalog parts ("X-999-…") are excluded here too, and instead get a full always-collapsed <strong>Bought-Out Parts</strong> reference panel (Item Master material and CAD material side by side, mismatches marked, never counted as findings).</li>
-          <li><strong>Revision: CAD vs Item Master</strong> — active once a loaded CAD source carries revision data and the Item Master has a Revision column. Unlike material there's no naming-convention ambiguity, so revision values are compared directly (trimmed, case-insensitive) — any difference is a genuine finding, shown both in the main summary row's "revision mismatches" card and in its own detail section.</li>
-          <li><strong>Export file name:</strong> when the Item Master's top-level row carries the organization's SPN/PN project key (from its Producer / Producer Number columns, or parsed from the Description text), both the comparison export and the QC report include it in the file name.</li>
-          <li><strong>Load from folder</strong> (Chrome/Edge only — a browser can't read a typed path, so this uses the browser's own folder picker): click, choose the PNxxxx project folder once, and the app finds the "Autodesk Vault…" PDF, the "EBOM_…" Item Master export, an "INVENTOR_BOM_…" export (optional second CAD source), and (if present) a "PNxxxx_LLDBO" file inside it, loads them automatically, runs the comparisons, and writes the result workbook straight back into that folder — no download step. If a required file is missing or the folder has more than one candidate, that side is left for you to drop in manually; the normal upload boxes always work as a fallback.</li>
-          <li><strong>Long-Lead Parts (LLDBO)</strong> — optional, checked once both it and the Item Master are loaded: long-lead direct-bought-out parts are released to procurement ahead of the normal BOM release to cover supplier lead times. This flags any long-lead part number that never made it into the Item Master (the early release didn't get captured, so it may quietly never get ordered through the normal channel) and any whose long-lead quantity (summed if the same part appears on more than one line) doesn't match the Item Master's rolled-up total. If the LLDBO document's own SPN/PN project key doesn't match the loaded Item Master's, a warning flags the likely mismatched files before anything else is reported. Rows not yet assigned a part number are counted separately and not treated as findings.</li>
+          <li><strong>Missing from Item Master:</strong> part numbers found in the CAD BOM, but absent from the Item Master. This is the classic sign of a component set to <em>BOM Reference</em> in Inventor by mistake.</li>
+          <li><strong>Reference assemblies:</strong> when a whole assembly is missing, its child parts are grouped under it and collapsed. A reference assembly's entire BOM is expected to be absent, so only the assembly itself needs action.</li>
+          <li><strong>Reference items</strong> (needs two CAD sources): components in the full CAD structure (PDF or Vault paste) that are absent from the Inventor BOM export. This is the exact list of what is currently flagged <em>BOM Reference</em> in the model. Each entry is marked to show if it also reached the Item Master. Review this list to confirm every entry is intentional.</li>
+          <li><strong>Quantity mismatches:</strong> the app compares the rolled-up total quantity per part (its own quantity, multiplied by parent assembly quantities, summed over all occurrences) between CAD and Item Master. This needs a source with a QTY column, which means the Inventor BOM export. The Vault PDF and flat paste carry no quantities.</li>
+          <li><strong>In Item Master only:</strong> items whose number never appears in the CAD BOM. These are stale entries, or entries added by hand, and are worth a review.</li>
+          <li><strong>Item Master data quality:</strong> runs the moment the Item Master loads. No CAD BOM is required. This section runs nine checks on the file itself. Seven are listed here. The two release-blocking checks are described separately below, since each gets its own box.
+            <ul>
+              <li>The top-level row's Producer or Producer Number appears in its Description.</li>
+              <li>The "END OF LINE" entry has the organization's fixed part number and a whole-number Row Order.</li>
+              <li>The Quantity and Item Qty columns agree on every row. This catches a manual edit to one column that was not mirrored to the other. It only runs when the export carries both columns. A per-unit column, like "QTY per Unit", is never mistaken for Item Qty.</li>
+              <li>When the export includes an Entity Icon column, it reads "Normal" on every row.</li>
+              <li>Every row has a Title and a Description. Purchased or catalog parts, numbered "X-999-…", are only flagged when both fields are missing.</li>
+              <li>Every non-assembly, non-purchased row has a Material value.</li>
+              <li>The same part number, used at more than one BOM position, carries the same Revision everywhere.</li>
+            </ul>
+            A check can pass on its own terms, but still turn amber ("OK, but see below") when a related CAD-vs-Item-Master comparison finds a real difference.
+          </li>
+          <li><strong>Sketch parts in the Item Master (7-333-…):</strong> release-blocking, with its own box. 7-333-… numbers are rough-sketch models. They may exist in CAD, but <em>only ever as Reference</em>. One reaching the released Item Master is a serious release error. The app reports every hit with its Row #, Row Order, immediate parent, <em>and the full parent trail</em> (for example, “ASSY-A (Top Assembly) › SUB-B (Sub Assembly)”), so you can trace exactly how the part got in. This check only flags parts in the Item Master. Finding them in CAD is expected, and is not reported.</li>
+          <li><strong>Item state (obsolete or invalid revisions):</strong> release-blocking, with its own box. A released BOM should hold Certified items only. <em>Obsolete</em>, <em>Invalid</em>, and <em>Phased Out</em> states are errors, since the part was released against a dead revision. <em>New</em> is shown as an amber warning, not a failure, since genuine released exports do contain New rows. This check reads the Item Master's “State” column, which the app carefully separates from the neighboring “File Link State” and “State (Historical)” columns. Those two columns describe the CAD file link, not the item.</li>
+          <li><strong>Material: CAD vs Item Master:</strong> active once a loaded CAD source actually carries material data (the flat Vault paste, or an Inventor BOM export that included the Material column). Vault's exported columns are user-configurable, so this varies by file. This check compares material for manufactured parts. It normalizes naming-convention differences (DIN vs AISI grade, spacing, abbreviation, and language), so it flags only genuine differences. A grade's L-suffix (304 vs 304L) stays significant. Purchased or catalog parts ("X-999-…") are excluded here too. They instead get a full, always-collapsed <strong>Bought-Out Parts</strong> reference panel (Item Master material and CAD material side by side, mismatches marked, never counted as findings).</li>
+          <li><strong>Revision: CAD vs Item Master:</strong> active once a loaded CAD source carries revision data, and the Item Master has a Revision column. Unlike material, there is no naming-convention ambiguity here, so the app compares revision values directly (trimmed, not case-sensitive). Any difference is a genuine finding, shown both in the main summary row's "revision mismatches" card, and in its own detail section.</li>
+          <li><strong>Export file name:</strong> when the Item Master's top-level row carries the organization's SPN/PN project key (from its Producer or Producer Number columns, or parsed from the Description text), both the comparison export and the QC report include it in the file name.</li>
+          <li><strong>Load from folder</strong> (Chrome and Edge only: a browser cannot read a typed path, so this feature uses the browser's own folder picker): click the button, and choose the PNxxxx project folder one time. The app then finds the "Autodesk Vault…" PDF, the "EBOM_…" Item Master export, an "INVENTOR_BOM_…" export (an optional second CAD source), and a "PNxxxx_LLDBO" file, if present. It loads every file it finds, runs the comparisons, and writes the result workbook straight back into that folder. There is no download step. If a required file is missing, or the folder has more than one candidate file, the app leaves that side empty for you to drop in manually. The normal upload boxes always work as a fallback.</li>
+          <li><strong>Long-Lead Parts (LLDBO):</strong> optional, checked once both this file and the Item Master are loaded. Long-lead direct-bought-out parts are released to procurement ahead of the normal BOM release, to cover supplier lead times. This check flags any long-lead part number that never reached the Item Master (the early release was not captured, so the part may quietly never get ordered through the normal channel). It also flags any part whose long-lead quantity (summed if the same part appears on more than one line) does not match the Item Master's rolled-up total. If the LLDBO document's own SPN/PN project key does not match the loaded Item Master's key, a warning flags the likely mismatched files, before anything else is reported. Rows not yet assigned a part number are counted separately, and are not treated as findings.</li>
         </ul>
       </details>
     </section>
