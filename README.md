@@ -387,6 +387,33 @@ The app does not route this file through the generic CAD file auto-detector, on 
 Its "PART NO" and "Qty." headers would otherwise match the CAD leveled-table keyword list,
 and get misparsed as a CAD BOM.
 
+## Item Master diff
+
+A second, standalone page (`im-diff.html`, linked from the main tool's footer). It compares
+two exports of the SAME Item Master BOM taken at different points in time, for example
+before and after a release, to show exactly what changed. This is Item-Master-vs-itself
+across time, distinct from the main tool's CAD-vs-Item-Master comparison.
+
+Drop the older export in the left box and the newer export in the right box, then click
+**Compare**:
+
+- **Added:** part numbers present in the newer file but not the older one.
+- **Removed:** part numbers present in the older file but not the newer one.
+- **Changed:** part numbers present in both, where Quantity, Revision, Material, Title,
+  Description, or State differs, with the old and new value for every changed field.
+- **Match key:** part number only, not case-sensitive. `Row Order` (the dotted position
+  path) is not used to match parts across the two files, since it is a same-file positional
+  index. It shifts whenever a sibling is added, removed, or reordered between releases,
+  even when a part itself did not change.
+- Material changes reuse the main tool's naming-convention normalization (DIN vs AISI grade,
+  spacing, language), so a part written differently but chemically the same material is not
+  reported as changed.
+- If the two files carry different SPN/PN project keys, a warning appears before any
+  findings, since the more likely explanation is the wrong pair of files, not real changes.
+
+Results download as their own `.xlsx` workbook (Added / Removed / Changed sheets), separate
+from the main tool's export.
+
 ## Development
 
 There is no build step. The app is plain HTML, CSS, and JS. Libraries are vendored in
@@ -408,7 +435,9 @@ js/revision-compare.js    revision CAD-vs-IM comparison (no DOM)
 js/findings.js            cross-check findings registry — one primary finding per part (no DOM)
 js/lldbo-compare.js       LLDBO vs Item Master comparison (no DOM)
 js/folder.js              folder auto-load classification/scan (no DOM)
-js/app.js                 UI wiring
+js/app.js                 UI wiring for index.html
+js/im-diff-compare.js     Item Master vs Item Master diff, by part number (no DOM)
+js/im-diff-app.js         UI wiring for im-diff.html (the standalone diff page)
 ```
 
 `vendor/xlsx.full.min.js` is [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style), not

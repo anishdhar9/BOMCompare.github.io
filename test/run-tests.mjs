@@ -30,6 +30,7 @@ const { findings } = require(path.join(rootDir, 'js/findings.js'));
 const { folder } = require(path.join(rootDir, 'js/folder.js'));
 const { lldboParser } = require(path.join(rootDir, 'js/parsers/lldbo.js'));
 const { lldboCompare } = require(path.join(rootDir, 'js/lldbo-compare.js'));
+const { imDiffCompare } = require(path.join(rootDir, 'js/im-diff-compare.js'));
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -109,6 +110,80 @@ console.log('\n== synthetic: Qty mismatch breakdown carries Item Master Row # ==
   check('PART-X imBreakdown carries the real Item Master Row # (4) and Row Order ("1.1")',
     mismatch.imBreakdown.length === 1 && mismatch.imBreakdown[0].sourceRow === 4 && mismatch.imBreakdown[0].rowOrder === '1.1',
     mismatch.imBreakdown);
+}
+
+console.log('\n== synthetic: Item Master diff (diffItemMasters) ==');
+{
+  const header = ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity', 'Revision', 'Material', 'State'];
+  const imOldAoa = [
+    header,
+    ['MACH-01', '-', 'Machine', 'desc', '-', '0', '', 'Certified'],
+    ['PART-REMOVED', '1', 'Removed Part', 'desc', '2 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-QTY', '2', 'Qty Part', 'desc', '2 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-REV', '3', 'Rev Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-SAME', '4', 'Same Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-MAT', '5', 'Mat Part', 'desc', '1 Each', '0', '1.4301', 'Certified'],
+  ];
+  const imNewAoa = [
+    header,
+    ['MACH-01', '-', 'Machine', 'desc', '-', '0', '', 'Certified'],
+    ['PART-ADDED', '1', 'Added Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-QTY', '2', 'Qty Part', 'desc', '4 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-REV', '3', 'Rev Part', 'desc', '1 Each', '1', 'AISI 304', 'Certified'],
+    ['PART-SAME', '4', 'Same Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-MAT', '5', 'Mat Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+  ];
+  const parse = (aoa) => itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, { utils: { sheet_to_json: () => aoa } });
+  const imOld = parse(imOldAoa);
+  const imNew = parse(imNewAoa);
+
+  const diffRaw = imDiffCompare.diffItemMasters(imOld, imNew, indexItemMaster);
+  check('one part added', diffRaw.added.length === 1 && diffRaw.added[0].number === 'PART-ADDED', diffRaw.added);
+  check('one part removed', diffRaw.removed.length === 1 && diffRaw.removed[0].number === 'PART-REMOVED', diffRaw.removed);
+  check('without materialsMatch: 3 changed (Qty, Rev, and raw-text Material difference)',
+    diffRaw.changed.length === 3, diffRaw.changed.map(c => c.number));
+  check('PART-SAME never appears as changed', !diffRaw.changed.some(c => c.number === 'PART-SAME'));
+
+  const qtyChange = diffRaw.changed.find(c => c.number === 'PART-QTY');
+  check('PART-QTY field diff names Quantity, old 2 -> new 4',
+    qtyChange && qtyChange.fields.length === 1 && qtyChange.fields[0].field === 'Quantity' &&
+    qtyChange.fields[0].old === '2' && qtyChange.fields[0].new === '4', qtyChange);
+
+  const revChange = diffRaw.changed.find(c => c.number === 'PART-REV');
+  check('PART-REV field diff names Revision, old 0 -> new 1',
+    revChange && revChange.fields.length === 1 && revChange.fields[0].field === 'Revision' &&
+    revChange.fields[0].old === '0' && revChange.fields[0].new === '1', revChange);
+
+  const matChangeRaw = diffRaw.changed.find(c => c.number === 'PART-MAT');
+  check('without materialsMatch, PART-MAT (1.4301 -> AISI 304, same grade) IS flagged as changed (raw text differs)',
+    !!matChangeRaw, diffRaw.changed.map(c => c.number));
+
+  const diffNormalized = imDiffCompare.diffItemMasters(imOld, imNew, indexItemMaster, materialCompare.materialsMatch);
+  check('with materialsMatch injected, PART-MAT (same grade, different spelling) is NOT flagged',
+    !diffNormalized.changed.some(c => c.number === 'PART-MAT'), diffNormalized.changed.map(c => c.number));
+  check('with materialsMatch injected, only 2 changed remain (Qty, Rev)',
+    diffNormalized.changed.length === 2, diffNormalized.changed.map(c => c.number));
+
+  check('unique counts carried through', diffRaw.oldUniqueCount === 6 && diffRaw.newUniqueCount === 6,
+    { old: diffRaw.oldUniqueCount, new: diffRaw.newUniqueCount });
+  check('unchangedCount excludes added/removed/changed (MACH-01 + PART-SAME = 2)',
+    diffRaw.unchangedCount === 2, diffRaw.unchangedCount);
+
+  // Regression: materialsMatch treats a blank as never matching anything (by
+  // design, for the main CAD-vs-IM check). A literal "-" placeholder material
+  // strips down to "" under its normalization, so naively calling
+  // materialsMatch(oldMat, newMat) on two IDENTICAL "-" values would
+  // misreport them as "changed" — raw equality must short-circuit first.
+  const placeholderAoa = (mat) => [
+    header,
+    ['MACH-01', '-', 'Machine', 'desc', '-', '0', '', 'Certified'],
+    ['PART-DASH', '1', 'Dash Part', 'desc', '1 Each', '0', mat, 'Certified'],
+  ];
+  const imDashOld = parse(placeholderAoa('-'));
+  const imDashNew = parse(placeholderAoa('-'));
+  const dashDiff = imDiffCompare.diffItemMasters(imDashOld, imDashNew, indexItemMaster, materialCompare.materialsMatch);
+  check('identical "-" placeholder material on both sides is NOT flagged as changed',
+    !dashDiff.changed.some(c => c.number === 'PART-DASH'), dashDiff.changed);
 }
 
 console.log('\n== synthetic: quantity-cascade detection (detectQuantityCascades) ==');
@@ -1036,7 +1111,7 @@ console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-o
 
 /* ---------------- real-sample baseline tests ---------------- */
 
-const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath, invBomPath, imBomMatPath, pdf726Path, invBom22819Path, imBom22819Path] = process.argv.slice(2);
+const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath, invBomPath, imBomMatPath, pdf726Path, invBom22819Path, imBom22819Path, imDiffOldPath, imDiffNewPath] = process.argv.slice(2);
 let pdfjsLib = null;
 try { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); } catch (e) { /* npm install to enable PDF tests */ }
 
@@ -1448,6 +1523,25 @@ if (invBom22819Path && imBom22819Path) {
     countDescendants(cascadeRoot) >= 300, countDescendants(cascadeRoot));
 } else if (invBom22819Path || imBom22819Path) {
   console.log('\n(the PN22819 cascade regression needs both the Inventor BOM export and its Item Master path)');
+}
+
+if (imDiffOldPath && imDiffNewPath) {
+  console.log('\n== real samples: Item Master diff (two PN22819 EBOM exports from this session) ==');
+  const oldWb = XLSX.read(fs.readFileSync(imDiffOldPath), { type: 'buffer' });
+  const imOld = itemMasterParser.parse(oldWb, XLSX);
+  const newWb = XLSX.read(fs.readFileSync(imDiffNewPath), { type: 'buffer' });
+  const imNew = itemMasterParser.parse(newWb, XLSX);
+  check('both real Item Master files parsed', !!imOld && !!imNew, { old: !!imOld, new: !!imNew });
+
+  const realDiff = imDiffCompare.diffItemMasters(imOld, imNew, indexItemMaster, materialCompare.materialsMatch);
+  check('no false-positive "-" placeholder changes (regression: raw-equality must short-circuit materialsMatch)',
+    !realDiff.changed.some(c => c.fields.some(f => f.field === 'Material' && f.old === f.new)),
+    realDiff.changed.filter(c => c.fields.some(f => f.field === 'Material' && f.old === f.new)));
+  check('every reported change actually differs (old !== new for every field)',
+    realDiff.changed.every(c => c.fields.every(f => f.old !== f.new)),
+    realDiff.changed.filter(c => c.fields.some(f => f.old === f.new)));
+} else if (imDiffOldPath || imDiffNewPath) {
+  console.log('\n(the Item Master diff regression needs both the older and newer Item Master paths)');
 }
 
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nall tests passed');
