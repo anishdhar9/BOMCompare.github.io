@@ -138,6 +138,7 @@
           <button class="tab active" data-tab="missing">Missing from Item Master <span class="count" id="count-missing"></span></button>
           <button class="tab hidden" data-tab="ref" id="tab-ref">Reference items <span class="count" id="count-ref"></span></button>
           <button class="tab" data-tab="qty">Quantity mismatches <span class="count" id="count-qty"></span></button>
+          <button class="tab" data-tab="cascade">Quantity cascades <span class="count" id="count-cascade"></span></button>
           <button class="tab" data-tab="imonly">In Item Master only <span class="count" id="count-imonly"></span></button>
         </nav>
         <div class="tools">
@@ -153,6 +154,7 @@
       <div class="tab-pane" id="pane-missing"></div>
       <div class="tab-pane hidden" id="pane-ref"></div>
       <div class="tab-pane hidden" id="pane-qty"></div>
+      <div class="tab-pane hidden" id="pane-cascade"></div>
       <div class="tab-pane hidden" id="pane-imonly"></div>
     </section>
 
@@ -175,6 +177,7 @@
           <li><strong>Reference assemblies:</strong> when a whole assembly is missing, its child parts are grouped under it and collapsed. A reference assembly's entire BOM is expected to be absent, so only the assembly itself needs action.</li>
           <li><strong>Reference items</strong> (needs two CAD sources): components in the full CAD structure (PDF or Vault paste) that are absent from the Inventor BOM export. This is the exact list of what is currently flagged <em>BOM Reference</em> in the model. Each entry is marked to show if it also reached the Item Master. Review this list to confirm every entry is intentional.</li>
           <li><strong>Quantity mismatches:</strong> the app compares the rolled-up total quantity per part (its own quantity, multiplied by parent assembly quantities, summed over all occurrences) between CAD and Item Master. This needs a source with a QTY column, which means the Inventor BOM export. The Vault PDF and flat paste carry no quantities.</li>
+          <li><strong>Quantity cascades:</strong> the plain quantity check compares each part's total rolled-up quantity, so it cannot see WHERE a discrepancy starts — one bad assembly can surface as hundreds of separately-flagged descendants. When ALL of an assembly's mismatched direct children share one clean ratio (for example every child at exactly 2×), the app reports ONE finding for that assembly instead, with the ratio and child count. Every part in the affected subtree is grouped under that one finding, the same demotion "One finding per part" already applies elsewhere. Fix the one root-cause row and the rest of the subtree's findings resolve with it.</li>
           <li><strong>In Item Master only:</strong> items whose number never appears in the CAD BOM. These are stale entries, or entries added by hand, and are worth a review.</li>
           <li><strong>Item Master data quality:</strong> runs the moment the Item Master loads. No CAD BOM is required. This section runs nine checks on the file itself. Seven are listed here. The two release-blocking checks are described separately below, since each gets its own box.
             <ul>
@@ -201,7 +204,7 @@
   </main>
 
   <footer class="app-footer">
-    <div class="wrap">BOM Compare · runs entirely client-side · <a href="https://github.com/anishdhar9/BOMCompare.github.io">source</a></div>
+    <div class="wrap">BOM Compare · runs entirely client-side · <a href="im-diff.html">Item Master diff tool</a> · <a href="https://github.com/anishdhar9/BOMCompare.github.io">source</a></div>
   </footer>
 
   <script src="vendor/xlsx.full.min.js"></script>

@@ -151,6 +151,9 @@ two exports of the same BOM traceable and consistent with each other.
   number between the two BOMs (row quantity multiplied by parent assembly quantities,
   summed over every occurrence), and shows a per-parent breakdown. This check needs the
   Inventor BOM export, or any CAD source with a Qty column.
+- **Quantity cascades** (red): a whole Item Master subtree whose direct children are ALL
+  released at one clean, uniform ratio of their CAD quantity — usually one root-cause data
+  error, not many. See "Quantity cascades" below.
 - **Revision mismatches** (amber): the app compares CAD revision directly against the Item
   Master's Revision, for every shared part. See "Revision: CAD vs Item Master" below. This
   check needs a Revision column on both sides.
@@ -183,13 +186,14 @@ Severity order, most serious first:
 | 3 | Missing from Item Master |
 | 4 | Long-lead part missing from Item Master |
 | 5 | Reference item |
-| 6 | Quantity mismatch (CAD vs Item Master) |
-| 7 | Long-lead quantity mismatch |
-| 8 | Revision mismatch vs CAD |
-| 9 | Material mismatch vs CAD |
-| 10 | In Item Master only |
-| 11 | Item Master data-quality checks (Quantity vs Item Qty, Revision consistency, Material, Title/Description, Entity Icon, Producer, End of Line) |
-| 12 | Not yet certified (`New` state), ranked low so it cannot hide a real finding |
+| 6 | Quantity cascade (whole subtree released at one ratio) |
+| 7 | Quantity mismatch (CAD vs Item Master) |
+| 8 | Long-lead quantity mismatch |
+| 9 | Revision mismatch vs CAD |
+| 10 | Material mismatch vs CAD |
+| 11 | In Item Master only |
+| 12 | Item Master data-quality checks (Quantity vs Item Qty, Revision consistency, Material, Title/Description, Entity Icon, Producer, End of Line) |
+| 13 | Not yet certified (`New` state), ranked low so it cannot hide a real finding |
 
 A **Parts needing attention** table sits at the top of the page. It shows one row per part,
 most serious issue first, with every issue found on that part. Click a row to jump to the
@@ -208,6 +212,27 @@ not part of the actionable count. Click "show N grouped" to reveal them.
 Note: the per-occurrence rows inside a quantity mismatch's expander (its `cadBreakdown` and
 `imBreakdown`) are *not* duplicates. They show "where this part is used", and stay as they
 are.
+
+### Quantity cascades
+
+The plain "Quantity mismatches" check compares each part's total ROLLED-UP quantity. It
+cannot see WHERE in the tree a discrepancy starts, so one bad assembly node can surface as
+hundreds of separately-flagged descendants, all with the correct value at their own row but
+the wrong value once their parent's multiplier is applied. Diagnosed on a real machine
+(PN22819): every one of the 92 direct children of one Item Master assembly carried exactly
+2× its CAD-required quantity, and that single error cascaded into 380 flagged rows.
+
+The **Quantity cascades** tab and dashboard tile catch this directly. When ALL of an
+assembly's mismatched direct children share one clean ratio (2×, 4×, 0.5×, and so on), the
+app reports ONE finding for that assembly, with the ratio and child count
+("92 of 92 children at 2×"), instead of flagging every downstream part on its own. Every
+part in the affected subtree is grouped under that one finding — including parts that also
+independently appear in the flat "Quantity mismatches" list — the same demotion the findings
+registry already applies to other checks (see "One finding per part" above). Fix the one
+root-cause row and the rest of the subtree's findings resolve with it.
+
+This needs the same data the plain quantity check needs (a leveled CAD source with
+quantities): it is not a separate optional file.
 
 ## Overview dashboard
 
@@ -362,6 +387,63 @@ The app does not route this file through the generic CAD file auto-detector, on 
 Its "PART NO" and "Qty." headers would otherwise match the CAD leveled-table keyword list,
 and get misparsed as a CAD BOM.
 
+## Item Master diff
+
+A second, standalone page (`im-diff.html`, linked from the main tool's footer). It compares
+two exports of the SAME Item Master BOM taken at different points in time, for example
+before and after a release, to show exactly what changed. This is Item-Master-vs-itself
+across time, distinct from the main tool's CAD-vs-Item-Master comparison.
+
+Drop the older export in the left box and the newer export in the right box, then click
+**Compare**:
+
+- **Added:** part numbers present in the newer file but not the older one.
+- **Removed:** part numbers present in the older file but not the newer one.
+- **Changed:** part numbers present in both, where Quantity, Revision, Material, Title,
+  Description, or State differs, with the old and new value for every changed field.
+- **Match key:** part number only, not case-sensitive. `Row Order` (the dotted position
+  path) is not used to match parts across the two files, since it is a same-file positional
+  index. It shifts whenever a sibling is added, removed, or reordered between releases,
+  even when a part itself did not change.
+- Material changes reuse the main tool's naming-convention normalization (DIN vs AISI grade,
+  spacing, language), so a part written differently but chemically the same material is not
+  reported as changed.
+- If the two files carry different SPN/PN project keys, a warning appears before any
+  findings, since the more likely explanation is the wrong pair of files, not real changes.
+
+Results download as their own `.xlsx` workbook (Added / Removed / Changed sheets), separate
+from the main tool's export.
+
+### ECR sheet
+
+Below the diff, an optional **ECR sheet** panel fills this organization's ECR (Engineering
+Change Request) Excel template from the same two files, reverse-engineered from a real
+filled sample and its blank template:
+
+- **Item No. With Rev:** the part number fused with a zero-padded 2-digit revision suffix
+  (`7-330-20014-02` = part `7-330-20014` at revision `02`). The Item Master carries Number
+  and Revision as separate columns, so the app composes this string.
+- **A revision bump becomes a row pair**, not one changed row: the old number-with-revision
+  gets Old Qty set to its quantity and New Qty `0`, Action `Drg. Obsolete`. The new
+  number-with-revision gets Old Qty `0` and New Qty set to its quantity, Action `Drg.
+  Revised`.
+- **Action is derived automatically**, matched against the template's own dropdown list:
+  `Part Added`, `Part Deleted`, `Qty Changed`, `Drg. Obsolete`, `Drg. Revised`.
+- **Reason Code is left blank.** It is a 16-value business-justification list (`NEW FEATURE`,
+  `PCRN_MFG ERROR`, and so on) that needs human judgment about *why* the BOM changed, not
+  something a two-file diff can answer.
+- A part whose only changes are Material, Title, Description, or State, with no Quantity or
+  Revision change, has no matching Action code in the template, so it is not turned into an
+  ECR row. It is reported separately as "other changes needing manual review", so it is
+  never silently dropped.
+- The header block (Project Status, Details Of Change, Engg. Comment, the document/
+  department checkboxes, the 5-Why root-cause block) is left blank. These are all narrative
+  or judgment fields, out of scope for an automated diff.
+- The blank template is vendored into the app (`vendor/ECR_template.xlsx`, embedded as base64
+  in `vendor/ecr-template.b64.js` so it works when this page is opened directly from disk,
+  where fetching a sibling file is blocked in most browsers), not uploaded per run, since it
+  is a fixed company form.
+
 ## Development
 
 There is no build step. The app is plain HTML, CSS, and JS. Libraries are vendored in
@@ -383,8 +465,18 @@ js/revision-compare.js    revision CAD-vs-IM comparison (no DOM)
 js/findings.js            cross-check findings registry — one primary finding per part (no DOM)
 js/lldbo-compare.js       LLDBO vs Item Master comparison (no DOM)
 js/folder.js              folder auto-load classification/scan (no DOM)
-js/app.js                 UI wiring
+js/app.js                 UI wiring for index.html
+js/im-diff-compare.js     Item Master vs Item Master diff, by part number (no DOM)
+js/ecr-fill.js            ECR sheet row generation + company template fill (no DOM)
+js/im-diff-app.js         UI wiring for im-diff.html (the standalone diff page)
 ```
+
+`vendor/ECR_template.xlsx` is this organization's blank ECR form, kept as the source of
+truth a human can open and inspect. `vendor/ecr-template.b64.js` is its base64 encoding,
+regenerated from the `.xlsx` if the template ever changes (the regeneration command is in
+that file's header comment) — the app loads the base64 version at runtime, not the `.xlsx`
+directly, since `fetch()` of a sibling file is blocked when a page is opened straight from
+disk in most browsers.
 
 `vendor/xlsx.full.min.js` is [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style), not
 plain SheetJS. This was originally needed for a styled export sheet with real cell fills.

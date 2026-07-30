@@ -51,6 +51,12 @@
     { key: 'missing', severity: 100, label: 'Missing from Item Master', section: 'results', tab: 'missing' },
     { key: 'lldboMissing', severity: 95, label: 'Long-lead part missing from Item Master', section: 'lldbo-panel' },
     { key: 'reference', severity: 90, label: 'Reference item', section: 'results', tab: 'ref' },
+    // A whole subtree released at one uniform ratio (e.g. every direct child
+    // of one assembly entered at exactly 2x) is a single root-cause error,
+    // not N independent ones — it outranks the ordinary per-part quantity
+    // check so every descendant it explains is demoted under it instead of
+    // flooding the list with its own separate findings.
+    { key: 'qtyCascade', severity: 85, label: 'Quantity cascade (whole subtree released at one ratio)', section: 'results', tab: 'cascade' },
     { key: 'qty', severity: 80, label: 'Quantity mismatch (CAD vs Item Master)', section: 'results', tab: 'qty' },
     { key: 'lldboQty', severity: 75, label: 'Long-lead quantity mismatch', section: 'lldbo-panel' },
     { key: 'revision', severity: 70, label: 'Revision mismatch vs CAD', section: 'revision-sections' },
@@ -150,6 +156,14 @@
     if (res) {
       recordTree('missing', res.missingRoots);
       if (res.referenceRoots) recordTree('reference', res.referenceRoots);
+      if (res.qtyCascades && res.qtyCascades.applicable && res.qtyCascades.roots.length) {
+        recordTree('qtyCascade', res.qtyCascades.roots, function (node, depth) {
+          if (depth !== 0) return '';
+          const it = node.item;
+          return it.cascadeMismatchedChildCount + ' of ' + it.cascadeChildCount +
+            ' children released at ' + it.cascadeRatio + '×';
+        });
+      }
       for (const m of res.qtyMismatches || []) {
         record('qty', m.number, {
           number: m.number, title: m.title, description: m.description,

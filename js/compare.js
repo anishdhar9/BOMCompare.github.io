@@ -292,6 +292,135 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * Quantity-cascade detection
+   * ------------------------------------------------------------------ *
+   * A whole Item Master subtree released at one clean, uniform ratio of its
+   * CAD-required quantity (e.g. every direct child of one assembly entered
+   * at exactly 2x) usually traces back to ONE data-entry error, not many
+   * independent ones. The per-part "Quantity mismatches" check can't see
+   * this on its own — it only compares each part's total ROLLED-UP
+   * quantity, so a single doubled assembly node can surface as hundreds of
+   * separately-flagged descendants. This groups those back into one
+   * root-cause finding, the same way "Missing"/"In Item Master only"
+   * already group a missing subtree under its topmost missing ancestor.
+   */
+
+  const CASCADE_MIN_CHILDREN = 2;    // fewer than this is just one ordinary mismatch
+  const CASCADE_RATIO_PRECISION = 6; // decimal places used to group "the same ratio"
+
+  // Map<childPN, [{parentNumber, qty, ...}]> (a *Totals breakdowns map) ->
+  // Map<parentPN, Map<childPN, summed local qty>>. Both cadTotals() and
+  // indexItemMaster() already return breakdowns in this per-child-occurrence
+  // shape (used for the qty-mismatch expander's "where is this used" rows);
+  // this just re-groups the same data by parent instead of by child.
+  function buildParentChildQty(breakdowns) {
+    const map = new Map();
+    for (const [childPn, occurrences] of breakdowns) {
+      for (const occ of occurrences) {
+        if (!occ.parentNumber || occ.qty === null) continue;
+        if (!map.has(occ.parentNumber)) map.set(occ.parentNumber, new Map());
+        const kids = map.get(occ.parentNumber);
+        kids.set(childPn, (kids.get(childPn) || 0) + occ.qty);
+      }
+    }
+    return map;
+  }
+
+  // Full Item Master descendant subtree under `parentPn`, built from
+  // indexItemMaster's childSets (direct-child PN sets) and byNumber (PN ->
+  // representative row) — so every downstream part inherits the cascade
+  // grouping, not just the direct children the ratio was measured on.
+  function buildImSubtree(parentPn, imIndex, rootItem) {
+    const root = makeNode(rootItem);
+    const seen = new Set([parentPn]);
+    const walk = function (node, pn) {
+      const kids = imIndex.childSets.get(pn);
+      if (!kids) return;
+      for (const childPn of kids) {
+        if (seen.has(childPn)) continue;
+        seen.add(childPn);
+        const rows = imIndex.byNumber.get(childPn);
+        if (!rows || !rows.length) continue;
+        const childNode = makeNode(rows[0]);
+        attachChild(node, childNode);
+        walk(childNode, childPn);
+      }
+    };
+    walk(root, parentPn);
+    return root;
+  }
+
+  // ct: cadTotals() result for the qty-carrying CAD source (needs .breakdowns).
+  // imIndex: indexItemMaster() result for the loaded Item Master.
+  function detectQuantityCascades(ct, imIndex) {
+    if (!ct || !ct.breakdowns) return { applicable: false, roots: [] };
+    const cadMap = buildParentChildQty(ct.breakdowns);
+    const imMap = buildParentChildQty(imIndex.breakdowns);
+    if (!cadMap.size) return { applicable: false, roots: [] };
+
+    const candidates = []; // {parentPn, ratio, childCount, mismatchedChildCount}
+    for (const [parentPn, imKids] of imMap) {
+      const cadKids = cadMap.get(parentPn);
+      if (!cadKids) continue;
+      const ratioBuckets = new Map(); // rounded ratio -> count of children at that ratio
+      let comparable = 0;
+      for (const [childPn, imQty] of imKids) {
+        const cadQty = cadKids.get(childPn);
+        if (cadQty === undefined || cadQty === 0) continue;
+        comparable++;
+        if (Math.abs(cadQty - imQty) < 1e-9) continue; // matches — not mismatched
+        const ratio = Number((imQty / cadQty).toFixed(CASCADE_RATIO_PRECISION));
+        ratioBuckets.set(ratio, (ratioBuckets.get(ratio) || 0) + 1);
+      }
+      if (!ratioBuckets.size) continue;
+      let bestRatio = null, bestCount = 0;
+      for (const [ratio, count] of ratioBuckets) {
+        if (count > bestCount) { bestRatio = ratio; bestCount = count; }
+      }
+      // Every mismatched child under this parent must share the one ratio —
+      // a mixed bag of different ratios isn't one clean cause, so it's left
+      // for the ordinary per-part quantity-mismatch check instead.
+      const totalMismatched = Array.from(ratioBuckets.values()).reduce(function (a, b) { return a + b; }, 0);
+      if (bestCount < CASCADE_MIN_CHILDREN || bestCount !== totalMismatched) continue;
+      candidates.push({ parentPn: parentPn, ratio: bestRatio, childCount: comparable, mismatchedChildCount: bestCount });
+    }
+    if (!candidates.length) return { applicable: true, roots: [] };
+
+    // Drop any candidate that is itself a descendant of another candidate —
+    // it is already covered by the ancestor's subtree grouping below.
+    const pathOf = function (pn) {
+      const rows = imIndex.byNumber.get(pn);
+      return rows && rows.length && Array.isArray(rows[0].path) ? rows[0].path : null;
+    };
+    const isDescendantOf = function (path, ancestorPath) {
+      if (!path || !ancestorPath || path.length <= ancestorPath.length) return false;
+      for (let i = 0; i < ancestorPath.length; i++) if (path[i] !== ancestorPath[i]) return false;
+      return true;
+    };
+    const candidatePaths = candidates.map(function (c) { return pathOf(c.parentPn); });
+    const roots = [];
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      const path = candidatePaths[i];
+      let nested = false;
+      for (let j = 0; j < candidates.length; j++) {
+        if (i !== j && isDescendantOf(path, candidatePaths[j])) { nested = true; break; }
+      }
+      if (nested) continue;
+      const rows = imIndex.byNumber.get(c.parentPn);
+      if (!rows || !rows.length) continue;
+      const rootItem = Object.assign({}, rows[0], {
+        cascadeRatio: c.ratio,
+        cascadeChildCount: c.childCount,
+        cascadeMismatchedChildCount: c.mismatchedChildCount,
+      });
+      roots.push(buildImSubtree(c.parentPn, imIndex, rootItem));
+    }
+    roots.sort(function (a, b) { return b.item.cascadeMismatchedChildCount - a.item.cascadeMismatchedChildCount; });
+    return { applicable: true, roots: roots };
+  }
+
+  /* ------------------------------------------------------------------ *
    * Dual-source helpers
    * ------------------------------------------------------------------ */
 
@@ -389,8 +518,10 @@
     // 2) quantity mismatches — from whichever source carries quantities
     const qtySource = (bom && bom.hasQty) ? bom : (structure.hasQty ? structure : null);
     let qtyMismatches = null;
+    let qtyCascades = { applicable: false, roots: [] };
     if (qtySource) {
       const ct = cadTotals(qtySource);
+      qtyCascades = detectQuantityCascades(ct, imIndex);
       qtyMismatches = [];
       for (const [pn, cadTotal] of ct.totals) {
         if (!inIM(pn)) continue; // covered by "missing"
@@ -464,6 +595,7 @@
       missingRoots: missingRoots,             // actionable top-level findings (tree)
       actionableCount: missingRoots.length,
       qtyMismatches: qtyMismatches,           // null when no CAD source has quantities
+      qtyCascades: qtyCascades,               // {applicable, roots} — subtrees released at one uniform ratio
       imOnly: imOnly,                         // flat list (exports + findings registry)
       imOnlyRoots: imOnlyRoots,               // same entries grouped under their IM parent
       imOnlyActionable: imOnlyRoots.length,
@@ -493,5 +625,6 @@
     compareAll: compareAll,
     countDescendants: countDescendants,
     groupImOnly: groupImOnly,
+    detectQuantityCascades: detectQuantityCascades,
   };
 });
