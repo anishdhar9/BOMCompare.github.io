@@ -31,6 +31,7 @@ const { folder } = require(path.join(rootDir, 'js/folder.js'));
 const { lldboParser } = require(path.join(rootDir, 'js/parsers/lldbo.js'));
 const { lldboCompare } = require(path.join(rootDir, 'js/lldbo-compare.js'));
 const { imDiffCompare } = require(path.join(rootDir, 'js/im-diff-compare.js'));
+const { ecrFill } = require(path.join(rootDir, 'js/ecr-fill.js'));
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -184,6 +185,84 @@ console.log('\n== synthetic: Item Master diff (diffItemMasters) ==');
   const dashDiff = imDiffCompare.diffItemMasters(imDashOld, imDashNew, indexItemMaster, materialCompare.materialsMatch);
   check('identical "-" placeholder material on both sides is NOT flagged as changed',
     !dashDiff.changed.some(c => c.number === 'PART-DASH'), dashDiff.changed);
+}
+
+console.log('\n== synthetic: ECR sheet generation (diffForEcr / fillEcrTemplate) ==');
+{
+  const header = ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity', 'Revision', 'Material', 'State'];
+  const imOldAoa = [
+    header,
+    ['MACH-01', '-', 'Machine', 'desc', '-', '0', '', 'Certified'],
+    ['ASSY-1', '1', 'Assembly One', 'desc', '1 Each', '0', '', 'Certified'],
+    ['PART-REMOVED', '1.1', 'Removed Part', 'desc', '2 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-REVBUMP', '1.2', 'Rev Bump Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-QTYCHANGE', '1.3', 'Qty Change Part', 'desc', '2 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-MATONLY', '1.4', 'Mat Only Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-SAME', '1.5', 'Same Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+  ];
+  const imNewAoa = [
+    header,
+    ['MACH-01', '-', 'Machine', 'desc', '-', '0', '', 'Certified'],
+    ['ASSY-1', '1', 'Assembly One', 'desc', '1 Each', '0', '', 'Certified'],
+    ['PART-ADDED', '1.1', 'Added Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-REVBUMP', '1.2', 'Rev Bump Part', 'desc', '1 Each', '1', 'AISI 304', 'Certified'],
+    ['PART-QTYCHANGE', '1.3', 'Qty Change Part', 'desc', '4 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-MATONLY', '1.4', 'Mat Only Part', 'desc', '1 Each', '0', 'AISI 316', 'Certified'],
+    ['PART-SAME', '1.5', 'Same Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+  ];
+  const parseEcr = (aoa) => itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, { utils: { sheet_to_json: () => aoa } });
+  const imOld = parseEcr(imOldAoa);
+  const imNew = parseEcr(imNewAoa);
+
+  check('padRevision pads single digits, passes through multi-digit and letters',
+    ecrFill.padRevision('2') === '02' && ecrFill.padRevision('10') === '10' &&
+    ecrFill.padRevision('') === '00' && ecrFill.padRevision('A') === 'A');
+
+  const ecr = ecrFill.diffForEcr(imOld, imNew, indexItemMaster);
+  check('5 ECR rows: removed + added + 2 for the revision bump + qty changed',
+    ecr.rows.length === 5, ecr.rows.map(r => r.itemNoWithRev + ':' + r.action));
+  check('PART-MATONLY and PART-SAME never become ECR rows',
+    !ecr.rows.some(r => /PART-MATONLY|PART-SAME/.test(r.itemNoWithRev)), ecr.rows.map(r => r.itemNoWithRev));
+
+  const removedRow = ecr.rows.find(r => r.itemNoWithRev === 'PART-REMOVED-00');
+  check('removed row: Old 2 Each -> New 0, Action Part Deleted, parent ASSY-1-00',
+    !!removedRow && removedRow.oldQty === '2 Each' && removedRow.newQty === '0' &&
+    removedRow.action === 'Part Deleted' && removedRow.subAssyNumberWithRev === 'ASSY-1-00', removedRow);
+
+  const addedRow = ecr.rows.find(r => r.itemNoWithRev === 'PART-ADDED-00');
+  check('added row: Old 0 -> New 1 Each, Action Part Added',
+    !!addedRow && addedRow.oldQty === '0' && addedRow.newQty === '1 Each' && addedRow.action === 'Part Added', addedRow);
+
+  const obsoleteRow = ecr.rows.find(r => r.itemNoWithRev === 'PART-REVBUMP-00' && r.action === 'Drg. Obsolete');
+  const revisedRow = ecr.rows.find(r => r.itemNoWithRev === 'PART-REVBUMP-01' && r.action === 'Drg. Revised');
+  check('revision bump produces an Obsolete row (old rev, qty->0) and a Revised row (new rev, 0->qty)',
+    !!obsoleteRow && obsoleteRow.oldQty === '1 Each' && obsoleteRow.newQty === '0' &&
+    !!revisedRow && revisedRow.oldQty === '0' && revisedRow.newQty === '1 Each', { obsoleteRow, revisedRow });
+
+  const qtyRow = ecr.rows.find(r => r.itemNoWithRev === 'PART-QTYCHANGE-00');
+  check('qty-only change: Action "Qty Changed", Old 2 Each -> New 4 Each, revision suffix unchanged',
+    !!qtyRow && qtyRow.oldQty === '2 Each' && qtyRow.newQty === '4 Each' && qtyRow.action === 'Qty Changed', qtyRow);
+
+  check('material-only change is reported as an "other change", not an ECR row',
+    ecr.otherChanges.length === 1 && ecr.otherChanges[0].number === 'PART-MATONLY' &&
+    ecr.otherChanges[0].fields.includes('Material'), ecr.otherChanges);
+
+  // fillEcrTemplate against the real vendored company template.
+  const templatePath = path.join(rootDir, 'vendor/ECR_template.xlsx');
+  if (fs.existsSync(templatePath)) {
+    const templateWb = XLSX.readFile(templatePath);
+    ecrFill.fillEcrTemplate(templateWb, ecr.rows, XLSX);
+    const sheet = templateWb.Sheets['Sheet1'];
+    const filledAoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: null });
+    check('template header row (row 11) is untouched', filledAoa[10][0] === 'Line No.', filledAoa[10]);
+    check('template data starts at row 12 with Line No. 1', String(filledAoa[11][0]) === '1', filledAoa[11]);
+    check('template row count matches the number of ECR rows generated',
+      filledAoa.slice(11, 11 + ecr.rows.length).every(r => r[0] !== null), filledAoa.slice(11, 16));
+    check('a filled row carries the right composite item number in column C',
+      filledAoa[11][2] === ecr.rows[0].itemNoWithRev, { got: filledAoa[11][2], expected: ecr.rows[0].itemNoWithRev });
+  } else {
+    console.log('\n(vendor/ECR_template.xlsx not found — skipped the template-fill check)');
+  }
 }
 
 console.log('\n== synthetic: quantity-cascade detection (detectQuantityCascades) ==');

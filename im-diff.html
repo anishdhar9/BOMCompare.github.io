@@ -75,6 +75,19 @@
       <div class="tab-pane hidden" id="pane-changed"></div>
     </section>
 
+    <section class="im-qc hidden" id="ecr-panel">
+      <div class="im-qc-head">
+        <div>
+          <h2>ECR sheet <span class="optional-tag">optional</span></h2>
+          <p class="dz-hint">Fills this organization's ECR (Engineering Change Request) template from the diff above. Action, Old/New Quantity, and the composite "Item No. With Rev" are derived automatically. Reason Code and the form's header fields (Project Status, Details Of Change, Engg. Comment, the 5-Why block) need your own judgment, so they are left blank for you to fill in.</p>
+        </div>
+        <button type="button" class="btn btn-small" id="btn-ecr-export">Generate ECR sheet</button>
+      </div>
+      <div class="summary" id="ecr-summary"></div>
+      <p class="notice warn hidden" id="ecr-other-changes"></p>
+      <p class="dz-error" id="ecr-error"></p>
+    </section>
+
     <section class="howto">
       <details>
         <summary>How it works</summary>
@@ -84,6 +97,7 @@
           <li><strong>Added:</strong> part numbers present in the newer file but not the older one.</li>
           <li><strong>Removed:</strong> part numbers present in the older file but not the newer one.</li>
           <li><strong>Changed:</strong> part numbers present in both, where Quantity, Revision, Material, Title, Description, or State differs. Material is compared with the same naming-convention normalization the main BOM Compare tool uses (DIN vs AISI grade, spacing, language), so a part written differently but chemically the same material is not reported as changed.</li>
+          <li><strong>ECR sheet:</strong> fills this organization's ECR (Engineering Change Request) template from the same diff. "Item No. With Rev" fuses the part number with a zero-padded revision suffix. A revision bump becomes an old-row/new-row pair (Drg. Obsolete + Drg. Revised), and Action (Part Added, Part Deleted, Qty Changed, Drg. Obsolete, Drg. Revised) is derived automatically. Reason Code and the form's header fields need your own judgment, so they are left blank. A part whose only change is Material, Title, Description, or State has no matching Action code, so it is reported separately instead of being turned into a row.</li>
         </ul>
       </details>
     </section>
@@ -94,10 +108,12 @@
   </footer>
 
   <script src="vendor/xlsx.full.min.js"></script>
+  <script src="vendor/ecr-template.b64.js"></script>
   <script src="js/compare.js"></script>
   <script src="js/parsers/itemmaster.js"></script>
   <script src="js/material-compare.js"></script>
   <script src="js/im-diff-compare.js"></script>
+  <script src="js/ecr-fill.js"></script>
   <script src="js/im-diff-app.js"></script>
 </body>
 </html>

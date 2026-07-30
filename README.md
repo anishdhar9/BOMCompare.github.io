@@ -414,6 +414,36 @@ Drop the older export in the left box and the newer export in the right box, the
 Results download as their own `.xlsx` workbook (Added / Removed / Changed sheets), separate
 from the main tool's export.
 
+### ECR sheet
+
+Below the diff, an optional **ECR sheet** panel fills this organization's ECR (Engineering
+Change Request) Excel template from the same two files, reverse-engineered from a real
+filled sample and its blank template:
+
+- **Item No. With Rev:** the part number fused with a zero-padded 2-digit revision suffix
+  (`7-330-20014-02` = part `7-330-20014` at revision `02`). The Item Master carries Number
+  and Revision as separate columns, so the app composes this string.
+- **A revision bump becomes a row pair**, not one changed row: the old number-with-revision
+  gets Old Qty set to its quantity and New Qty `0`, Action `Drg. Obsolete`. The new
+  number-with-revision gets Old Qty `0` and New Qty set to its quantity, Action `Drg.
+  Revised`.
+- **Action is derived automatically**, matched against the template's own dropdown list:
+  `Part Added`, `Part Deleted`, `Qty Changed`, `Drg. Obsolete`, `Drg. Revised`.
+- **Reason Code is left blank.** It is a 16-value business-justification list (`NEW FEATURE`,
+  `PCRN_MFG ERROR`, and so on) that needs human judgment about *why* the BOM changed, not
+  something a two-file diff can answer.
+- A part whose only changes are Material, Title, Description, or State, with no Quantity or
+  Revision change, has no matching Action code in the template, so it is not turned into an
+  ECR row. It is reported separately as "other changes needing manual review", so it is
+  never silently dropped.
+- The header block (Project Status, Details Of Change, Engg. Comment, the document/
+  department checkboxes, the 5-Why root-cause block) is left blank. These are all narrative
+  or judgment fields, out of scope for an automated diff.
+- The blank template is vendored into the app (`vendor/ECR_template.xlsx`, embedded as base64
+  in `vendor/ecr-template.b64.js` so it works when this page is opened directly from disk,
+  where fetching a sibling file is blocked in most browsers), not uploaded per run, since it
+  is a fixed company form.
+
 ## Development
 
 There is no build step. The app is plain HTML, CSS, and JS. Libraries are vendored in
@@ -437,8 +467,16 @@ js/lldbo-compare.js       LLDBO vs Item Master comparison (no DOM)
 js/folder.js              folder auto-load classification/scan (no DOM)
 js/app.js                 UI wiring for index.html
 js/im-diff-compare.js     Item Master vs Item Master diff, by part number (no DOM)
+js/ecr-fill.js            ECR sheet row generation + company template fill (no DOM)
 js/im-diff-app.js         UI wiring for im-diff.html (the standalone diff page)
 ```
+
+`vendor/ECR_template.xlsx` is this organization's blank ECR form, kept as the source of
+truth a human can open and inspect. `vendor/ecr-template.b64.js` is its base64 encoding,
+regenerated from the `.xlsx` if the template ever changes (the regeneration command is in
+that file's header comment) — the app loads the base64 version at runtime, not the `.xlsx`
+directly, since `fetch()` of a sibling file is blocked when a page is opened straight from
+disk in most browsers.
 
 `vendor/xlsx.full.min.js` is [xlsx-js-style](https://github.com/gitbrent/xlsx-js-style), not
 plain SheetJS. This was originally needed for a styled export sheet with real cell fills.

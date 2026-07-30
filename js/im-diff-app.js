@@ -11,6 +11,7 @@
     old: null,   // parsed Item Master result (+ fileName)
     new: null,   // parsed Item Master result (+ fileName)
     diff: null,  // js/im-diff-compare.js diffItemMasters() result
+    ecr: null,   // js/ecr-fill.js diffForEcr() result
     filter: '',
     activeTab: 'added',
   };
@@ -211,7 +212,60 @@
     state.diff = BC.imDiffCompare.diffItemMasters(state.old, state.new, BC.indexItemMaster, BC.materialCompare.materialsMatch);
     $('results').classList.remove('hidden');
     renderResults();
+    $('ecr-panel').classList.remove('hidden');
+    renderEcrSummary();
   }
+
+  /* ----- ECR sheet ----- */
+
+  function renderEcrSummary() {
+    state.ecr = BC.ecrFill.diffForEcr(state.old, state.new, BC.indexItemMaster);
+    const summary = $('ecr-summary');
+    summary.innerHTML = '';
+    const cards = [
+      { num: state.ecr.rows.length, lbl: 'ECR rows ready to generate' },
+      { num: state.ecr.otherChanges.length, lbl: 'other changes needing manual review', cls: state.ecr.otherChanges.length ? 'amber' : '' },
+    ];
+    cards.forEach(function (c) {
+      const el = document.createElement('div');
+      el.className = 'card' + (c.cls ? ' ' + c.cls : '');
+      el.innerHTML = '<div class="num"></div><div class="lbl"></div>';
+      el.querySelector('.num').textContent = c.num;
+      el.querySelector('.lbl').textContent = c.lbl;
+      summary.appendChild(el);
+    });
+
+    const otherBox = $('ecr-other-changes');
+    if (state.ecr.otherChanges.length) {
+      const preview = state.ecr.otherChanges.slice(0, 20).map(function (c) { return c.number + ' (' + c.fields.join(', ') + ')'; }).join('; ');
+      const more = state.ecr.otherChanges.length > 20 ? ', and ' + (state.ecr.otherChanges.length - 20) + ' more' : '';
+      otherBox.textContent = state.ecr.otherChanges.length + ' part(s) have a Material, Title, Description, or State change ' +
+        'with no Quantity or Revision change, so there is no matching ECR Action code for them: ' + preview + more +
+        '. Review these in the Changed tab above and add them to the ECR sheet by hand if needed.';
+      otherBox.classList.remove('hidden');
+    } else {
+      otherBox.textContent = '';
+      otherBox.classList.add('hidden');
+    }
+  }
+
+  $('btn-ecr-export').addEventListener('click', function () {
+    $('ecr-error').textContent = '';
+    try {
+      if (!state.ecr) renderEcrSummary();
+      if (!state.ecr.rows.length) {
+        $('ecr-error').textContent = 'Nothing to generate: no Added, Removed, Quantity, or Revision changes were found.';
+        return;
+      }
+      const templateWb = XLSX.read(BC.ECR_TEMPLATE_BASE64, { type: 'base64' });
+      BC.ecrFill.fillEcrTemplate(templateWb, state.ecr.rows, XLSX);
+      const oldName = (state.old.fileName || 'old').replace(/\.[^.]+$/, '');
+      const newName = (state.new.fileName || 'new').replace(/\.[^.]+$/, '');
+      XLSX.writeFile(templateWb, 'ECR_' + oldName + '_vs_' + newName + '.xlsx');
+    } catch (e) {
+      $('ecr-error').textContent = e.message || String(e);
+    }
+  });
 
   $('btn-diff').addEventListener('click', function () {
     runDiff();
