@@ -50,6 +50,11 @@
     { key: 'c9warn', severity: 47, label: 'Not yet certified', section: 'im-qc' },
     { key: 'missing', severity: 100, label: 'Missing from Item Master', section: 'results', tab: 'missing' },
     { key: 'lldboMissing', severity: 95, label: 'Long-lead part missing from Item Master', section: 'lldbo-panel' },
+    // A virtual subassembly hides its whole child BOM from every other check:
+    // the part itself passes both presence checks, while its children scatter
+    // as unexplained "In Item Master only" rows. Ranked above `reference` so
+    // it owns those children rather than competing with them.
+    { key: 'virtualPart', severity: 92, label: 'Virtual part (no CAD file behind it)', section: 'results', tab: 'virtual' },
     { key: 'reference', severity: 90, label: 'Reference item', section: 'results', tab: 'ref' },
     // A whole subtree released at one uniform ratio (e.g. every direct child
     // of one assembly entered at exactly 2x) is a single root-cause error,
@@ -61,6 +66,7 @@
     { key: 'lldboQty', severity: 75, label: 'Long-lead quantity mismatch', section: 'lldbo-panel' },
     { key: 'revision', severity: 70, label: 'Revision mismatch vs CAD', section: 'revision-sections' },
     { key: 'material', severity: 60, label: 'Material mismatch vs CAD', section: 'material-sections' },
+    { key: 'titleDesc', severity: 55, label: 'Description mismatch vs CAD', section: 'titledesc-sections' },
     { key: 'imOnly', severity: 50, label: 'In Item Master only', section: 'results', tab: 'imonly' },
     { key: 'c3', severity: 45, label: 'Quantity vs Item Qty', section: 'im-qc' },
     { key: 'c7', severity: 44, label: 'Revision inconsistent across positions', section: 'im-qc' },
@@ -189,6 +195,43 @@
           detail: 'Item Master "' + m.imMaterial + '" vs CAD "' + m.cadMaterial + '"',
           sourceRow: m.sourceRow, parentNumber: m.parentNumber, parentTitle: m.parentTitle,
         });
+      }
+    }
+
+    const td = sources.titleDescResult;
+    if (td && td.applicable) {
+      for (const m of td.mismatches || []) {
+        record('titleDesc', m.number, {
+          number: m.number, title: m.title,
+          detail: 'Item Master "' + m.imDescription + '" vs CAD "' + m.cadDescription + '"',
+          sourceRow: m.sourceRow, parentNumber: m.parentNumber, parentTitle: m.parentTitle,
+        });
+      }
+    }
+
+    // Virtual parts own the orphaned children they explain, so each one is a
+    // single finding rather than N unexplained "In Item Master only" rows.
+    const virt = sources.virtualResult;
+    if (virt && virt.applicable) {
+      for (const v of (virt.confirmed || []).concat(virt.suspected || [])) {
+        record('virtualPart', v.number, {
+          number: v.number, title: v.title, description: v.description,
+          detail: (v.confidence === 'suspected' ? 'Suspected: ' : '') +
+            v.childCount + ' child part(s) exist only in the Item Master',
+          sourceRow: v.sourceRow,
+        });
+        for (const c of v.children || []) {
+          record('virtualPart', c.number, {
+            number: c.number, title: c.title, sourceRow: c.sourceRow,
+            detail: 'Child of virtual part ' + v.number,
+            parentNumber: v.number, parentTitle: v.title,
+          });
+          const part = byPn.get(normNumber(c.number));
+          if (part && !part.grouped) {
+            part.grouped = true;
+            part.groupedUnder = normNumber(v.number);
+          }
+        }
       }
     }
 

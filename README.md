@@ -154,6 +154,10 @@ two exports of the same BOM traceable and consistent with each other.
 - **Quantity cascades** (red): a whole Item Master subtree whose direct children are ALL
   released at one clean, uniform ratio of their CAD quantity — usually one root-cause data
   error, not many. See "Quantity cascades" below.
+- **Virtual parts** (red): a CAD BOM entry with no CAD file behind it, whose child parts
+  exist only in the Item Master. See "Virtual parts" below.
+- **Description mismatches** (amber): the app compares the CAD Description against the Item
+  Master Description for every shared part. See "Description: CAD vs Item Master" below.
 - **Revision mismatches** (amber): the app compares CAD revision directly against the Item
   Master's Revision, for every shared part. See "Revision: CAD vs Item Master" below. This
   check needs a Revision column on both sides.
@@ -186,14 +190,16 @@ Severity order, most serious first:
 | 3 | Missing from Item Master |
 | 4 | Long-lead part missing from Item Master |
 | 5 | Reference item |
-| 6 | Quantity cascade (whole subtree released at one ratio) |
-| 7 | Quantity mismatch (CAD vs Item Master) |
-| 8 | Long-lead quantity mismatch |
-| 9 | Revision mismatch vs CAD |
-| 10 | Material mismatch vs CAD |
-| 11 | In Item Master only |
-| 12 | Item Master data-quality checks (Quantity vs Item Qty, Revision consistency, Material, Title/Description, Entity Icon, Producer, End of Line) |
-| 13 | Not yet certified (`New` state), ranked low so it cannot hide a real finding |
+| 6 | Virtual part (no CAD file behind it) |
+| 7 | Quantity cascade (whole subtree released at one ratio) |
+| 8 | Quantity mismatch (CAD vs Item Master) |
+| 9 | Long-lead quantity mismatch |
+| 10 | Revision mismatch vs CAD |
+| 11 | Material mismatch vs CAD |
+| 12 | Description mismatch vs CAD |
+| 13 | In Item Master only |
+| 14 | Item Master data-quality checks (Quantity vs Item Qty, Revision consistency, Material, Title/Description, Entity Icon, Producer, End of Line) |
+| 15 | Not yet certified (`New` state), ranked low so it cannot hide a real finding |
 
 A **Parts needing attention** table sits at the top of the page. It shows one row per part,
 most serious issue first, with every issue found on that part. Click a row to jump to the
@@ -349,6 +355,63 @@ versus `316L` stay flagged as genuinely different materials), since this can be 
 weldability or corrosion choice, not just a formatting difference. On the same sample, this
 normalization reduces the 38 false positives to 7 real, worth-reviewing differences.
 
+### Description: CAD vs Item Master
+
+The app compares the CAD Description against the Item Master **Description** for every shared
+part. Which Item Master field to use was settled from real data, not assumed: across a
+2049-row Inventor export, the CAD Description matched the Item Master Description on 73% of
+shared parts, but the Item Master Title on only 1%. The Title is the catalogue name
+("Ventilation Tube"). The Description carries the same free text the CAD model does.
+
+Normalization is light on purpose. Case and spacing are ignored, and spacing is removed
+rather than merely collapsed, so a stray space inside a value is absorbed
+(`TANK - 300LTRS` equals `TANK - 300 LTRS`, `GCPilot` equals `GC Pilot`). Punctuation and
+digits stay significant, because that is exactly where the real errors live:
+
+- `OD 539 X 4 THK.` against `OD 539 X 3 THK.`, a changed thickness.
+- `G 1/4, Dia. 7.5` against `G 1/8, Dia. 7.5`, a changed thread size.
+- `With 30MM SKIRTING` against `With 27MM SKIRTING`, a changed dimension.
+
+These rows are skipped: parts whose number does not start with `7-` (procured at another
+company location), `X-999-` purchased or catalog parts (their descriptions are supplier text
+and differ constantly), the END OF LINE marker row, and any row where either side is blank
+(a blank Item Master description is Check 5's job). Assemblies are **not** skipped, because
+unlike material, an assembly does carry a description.
+
+### Virtual parts
+
+A virtual part is a BOM entry with no CAD file behind it. Inventor allows this so an assembly
+can appear in the BOM without a model. The problem is that every other check passes it: the
+part itself is in both BOMs, so it is neither "Missing from Item Master" nor "In Item Master
+only". Only its children are Item-Master-only, and they arrive as unexplained single rows,
+because their parent is not itself an Item-Master-only row and so cannot group them. The
+result is a placeholder assembly nobody notices and a pile of orphan rows nobody can connect
+back to it.
+
+The app finds these two ways:
+
+- **Confirmed.** The Inventor export includes the `Thumbnail` column, and this row's value is
+  the literal text `(NULL)`. Inventor writes an empty cell when a CAD file exists and
+  `(NULL)` when none does, so `(NULL)` is the exact marker. The part must also have at least
+  one Item Master child, and every one of those children must be absent from the CAD BOM.
+- **Suspected.** No loaded CAD export has a `Thumbnail` column, so the same shape is inferred
+  from structure alone: a CAD part with at least **three** Item Master children, all absent
+  from the CAD BOM. Three is the threshold because one- and two-child matches are dominated
+  by hose and cable cut-length rows. Tested across three real project pairs, a three-child
+  threshold produced no false positives while still finding every part the `Thumbnail` column
+  confirms. These hits are labelled "suspected" on screen.
+
+The `Thumbnail` column is user-configurable in Inventor and is missing from some exports.
+Include it to get the exact answer instead of the inferred one.
+
+Once found, a virtual part also acts as a grouping anchor: its orphaned children roll up
+underneath it in the "In Item Master only" tab, so the whole thing reads as one finding
+instead of one row per lost child.
+
+Virtual detection is deliberately **not** limited to this site's own `7-` parts. Unlike a
+missing material, a virtual subassembly hides its entire child BOM from every other check, so
+it is worth reporting wherever it occurs.
+
 ### Revision: CAD vs Item Master
 
 This check compares CAD revision against the Item Master's Revision, for every shared part.
@@ -462,6 +525,8 @@ js/parsers/detect.js         format detection / role validation
 js/imqc.js                Item Master data-quality checks (no DOM)
 js/material-compare.js    material CAD-vs-IM comparison + bought-out parts (no DOM)
 js/revision-compare.js    revision CAD-vs-IM comparison (no DOM)
+js/titledesc-compare.js   description CAD-vs-IM comparison (no DOM)
+js/virtual-parts.js       virtual-part detection (no CAD file behind a subassembly, no DOM)
 js/findings.js            cross-check findings registry — one primary finding per part (no DOM)
 js/lldbo-compare.js       LLDBO vs Item Master comparison (no DOM)
 js/folder.js              folder auto-load classification/scan (no DOM)

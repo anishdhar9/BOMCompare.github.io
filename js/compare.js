@@ -33,10 +33,39 @@
    * Item Master indexing
    * ------------------------------------------------------------------ */
 
+  // Resolves each row's true parent POSITIONALLY — by file order plus Row
+  // Order depth — instead of by Row Order string. Real exports reuse a
+  // position for adjacent siblings (verified on a real 2081-row export: 40
+  // duplicate positions, 249 rows left with an ambiguous ancestor), so a
+  // path-string lookup silently attributes a child to whichever branch
+  // happened to come first. Sequence + depth cannot collide that way. This
+  // is the same stack walk cadTotals() and groupMissingLeveled() already use
+  // for CAD levels.
+  //
+  // Returns Map<row, parentRow>; a row with no entry is a root (or carries
+  // no Row Order at all).
+  function buildParentIndex(rows) {
+    const parentOf = new Map();
+    const stack = []; // {depth, row}
+    for (const row of rows) {
+      if (!Array.isArray(row.path)) continue;
+      const depth = row.path.length;
+      while (stack.length && stack[stack.length - 1].depth >= depth) stack.pop();
+      if (stack.length) parentOf.set(row, stack[stack.length - 1].row);
+      stack.push({ depth: depth, row: row });
+    }
+    return parentOf;
+  }
+
+  function pathDepth(row) {
+    return Array.isArray(row.path) ? row.path.length : -1;
+  }
+
   // Builds lookup structures from the Item Master rows.
   function indexItemMaster(im) {
     const byNumber = new Map();       // PN -> [rows]
     const byPath = new Map();         // 'path.key' -> row (first wins)
+    const parentOf = buildParentIndex(im.rows); // row -> parent row
     const warnings = [];
     let dupPaths = 0;
 
@@ -58,23 +87,20 @@
       warnings.push(dupPaths + ' Item Master rows share a "Row Order" position with another row; all rows are compared, but the quantity roll-up uses the first row at each position.');
     }
 
-    // childSets: PN -> Set of direct-child PNs (union over all occurrences).
-    // Needs paths. children of path p are rows whose path is p + one segment.
+    // childSets: PN -> Set of direct-child PNs (union over all occurrences),
+    // and childRows: PN -> [child rows]. Both derived from the positional
+    // parent index, so a duplicated Row Order position can't graft one
+    // assembly's children onto another.
     const childSets = new Map();
-    const childrenOfPath = new Map(); // parent path key -> [rows]
+    const childRows = new Map();
     for (const row of im.rows) {
-      if (!Array.isArray(row.path) || row.path.length === 0) continue;
-      const parentKey = row.path.slice(0, -1).join('.');
-      if (!childrenOfPath.has(parentKey)) childrenOfPath.set(parentKey, []);
-      childrenOfPath.get(parentKey).push(row);
-    }
-    for (const [key, row] of byPath) {
-      const kids = childrenOfPath.get(key);
-      if (!kids) continue;
-      const pn = normNumber(row.number);
-      if (!childSets.has(pn)) childSets.set(pn, new Set());
-      const set = childSets.get(pn);
-      for (const k of kids) set.add(normNumber(k.number));
+      const parent = parentOf.get(row);
+      if (!parent) continue;
+      const ppn = normNumber(parent.number);
+      if (!ppn) continue;
+      if (!childSets.has(ppn)) { childSets.set(ppn, new Set()); childRows.set(ppn, []); }
+      childSets.get(ppn).add(normNumber(row.number));
+      childRows.get(ppn).push(row);
     }
 
     // Rolled-up total quantity per PN: sum over occurrences of
@@ -88,11 +114,14 @@
       if (Array.isArray(row.path) && row.path.length === 0) continue; // root row: qty '-'
       let eff = row.qty;
       let parentRow = null;
-      if (eff !== null && hasPaths && Array.isArray(row.path)) {
-        for (let i = row.path.length - 1; i >= 1 && eff !== null; i--) {
-          const anc = byPath.get(row.path.slice(0, i).join('.'));
-          if (!anc) continue; // gap in export; treat multiplier as 1
-          if (i === row.path.length - 1) parentRow = anc;
+      if (hasPaths && Array.isArray(row.path)) {
+        // Walk the real parent chain, multiplying by every ancestor below
+        // the root (the root row carries qty '-' and is not a multiplier) —
+        // same set of ancestors the previous path-prefix loop covered, but
+        // resolved positionally so duplicated positions can't mis-multiply.
+        const immediate = parentOf.get(row);
+        if (immediate && pathDepth(immediate) >= 1) parentRow = immediate;
+        for (let anc = immediate; anc && pathDepth(anc) >= 1 && eff !== null; anc = parentOf.get(anc)) {
           if (anc.qty !== null) eff *= anc.qty;
         }
       }
@@ -111,7 +140,11 @@
       }
     }
 
-    return { byNumber: byNumber, byPath: byPath, childSets: childSets, totals: totals, breakdowns: breakdowns, warnings: warnings };
+    return {
+      byNumber: byNumber, byPath: byPath, parentOf: parentOf,
+      childSets: childSets, childRows: childRows,
+      totals: totals, breakdowns: breakdowns, warnings: warnings,
+    };
   }
 
   /* ------------------------------------------------------------------ *
@@ -258,35 +291,65 @@
   // which is one finding (the subassembly), not hundreds — on a real sample this
   // collapses 1033 flat rows to 11 roots.
   //
-  // `rows` are the flat imOnly entries (in file order); `byPath` is
-  // indexItemMaster's path index. Falls back to one root per row when the export
-  // has no Row Order column (nothing to group by).
-  function groupImOnly(rows, byPath) {
+  // `rows` are the flat imOnly entries (in file order); `parentOf` is
+  // indexItemMaster's positional parent index. `anchorRows` is an optional
+  // Map<PN, imRow> of extra parts allowed to act as grouping parents even
+  // though they are not themselves Item-Master-only — used for virtual parts,
+  // which ARE in the CAD BOM but whose whole child BOM is not, so without this
+  // their children scatter as one root each. Falls back to one root per row
+  // when the export has no Row Order column (nothing to group by).
+  //
+  // Runs in two passes: every node is created first, then attached. A
+  // single-pass walk had to give up whenever the flagged ancestor's node did
+  // not exist yet (it appears later in row order) and silently emitted the
+  // child as a root.
+  function groupImOnly(rows, parentOf, anchorRows) {
     const rootNodes = [];
-    const seen = new Map();  // PN -> node (first occurrence wins)
+    const nodes = new Map();   // PN -> node (first occurrence wins)
+    const rowFor = new Map();  // PN -> the row that created the node
     const flagged = new Set();
+    const anchors = anchorRows || new Map();
     for (const r of rows) {
       const pn = normNumber(r.number);
       if (pn) flagged.add(pn);
     }
+    // pass 1 — one node per unique Item-Master-only PN
     for (const row of rows) {
       const pn = normNumber(row.number);
-      if (!pn || seen.has(pn)) continue;
-      const node = makeNode(row);
-      seen.set(pn, node);
-      // nearest ancestor (by Row Order path) that is itself Item-Master-only
+      if (!pn || nodes.has(pn)) continue;
+      nodes.set(pn, makeNode(row));
+      rowFor.set(pn, row);
+    }
+    // Anchor nodes are created lazily, so an anchor that never absorbs a child
+    // does not appear as an empty finding.
+    const anchorNodes = new Map();
+    const anchorNodeFor = function (pn) {
+      if (anchorNodes.has(pn)) return anchorNodes.get(pn);
+      const r = anchors.get(pn);
+      if (!r) return null;
+      const n = makeNode(r);
+      n.isAnchor = true;
+      anchorNodes.set(pn, n);
+      return n;
+    };
+    // Entries handed in may be copies of the Item Master rows; the parent
+    // index is keyed by row identity, so hop through __srcRow when present.
+    const parentRowOf = function (r) { return parentOf.get(r && r.__srcRow ? r.__srcRow : r); };
+    // pass 2 — attach each node under its nearest groupable ancestor
+    for (const [pn, node] of nodes) {
+      const row = rowFor.get(pn);
       let anc = null;
-      const path = Array.isArray(row.path) ? row.path : null;
-      if (path) {
-        for (let i = path.length - 1; i >= 1; i--) {
-          const cand = byPath.get(path.slice(0, i).join('.'));
-          if (!cand) continue;
-          const cpn = normNumber(cand.number);
-          if (cpn !== pn && flagged.has(cpn)) { anc = seen.get(cpn) || null; break; }
-        }
+      for (let cand = parentRowOf(row); cand; cand = parentRowOf(cand)) {
+        const cpn = normNumber(cand.number);
+        if (cpn === pn) continue;
+        if (flagged.has(cpn)) { anc = nodes.get(cpn) || null; break; }
+        if (anchors.has(cpn)) { anc = anchorNodeFor(cpn); break; }
       }
-      if (anc) attachChild(anc, node);
+      if (anc && anc !== node) attachChild(anc, node);
       else rootNodes.push(node);
+    }
+    for (const node of anchorNodes.values()) {
+      if (node.children.length) rootNodes.push(node);
     }
     return rootNodes;
   }
@@ -475,7 +538,9 @@
    * ------------------------------------------------------------------ */
 
   // cadSources: one or two parsed CAD results (e.g. Vault PDF + Inventor xlsx)
-  function compareAll(cadSources, im) {
+  // opts (optional): { virtualAnchorRows: Map<PN, imRow> } from
+  // js/virtual-parts.js — see the imOnly grouping below.
+  function compareAll(cadSources, im, opts) {
     const imIndex = indexItemMaster(im);
     const roles = pickRoles(cadSources);
     const structure = roles.structure;
@@ -549,16 +614,27 @@
     for (const row of im.rows) {
       const pn = normNumber(row.number);
       if (!pn || cadPNs.has(pn) || seenImOnly.has(pn)) continue;
+      // The Item Master's own root row is the machine's top-level record; it
+      // is never a line in the CAD BOM, so it is not a finding.
+      if (Array.isArray(row.path) && row.path.length === 0) continue;
       seenImOnly.add(pn);
-      const parentRow = Array.isArray(row.path) && row.path.length
-        ? imIndex.byPath.get(row.path.slice(0, -1).join('.'))
-        : null;
-      imOnly.push(Object.assign({}, row, {
+      const parentRow = imIndex.parentOf.get(row) || null;
+      const entry = Object.assign({}, row, {
         parentNumber: parentRow ? parentRow.number : '',
         parentTitle: parentRow ? (parentRow.title || '') : '',
-      }));
+      });
+      // These entries are COPIES, so they are not keys in the parent index
+      // (which is keyed by row identity). Keep a link back to the source row
+      // so grouping can still resolve the real ancestor chain. Non-enumerable
+      // so it never leaks into an export sheet.
+      Object.defineProperty(entry, '__srcRow', { value: row, enumerable: false });
+      imOnly.push(entry);
     }
-    const imOnlyRoots = groupImOnly(imOnly, imIndex.byPath);
+    // Virtual parts (js/virtual-parts.js, computed by the caller since it is
+    // a separate module) act as grouping anchors: they ARE in the CAD BOM, so
+    // they are not Item-Master-only rows themselves, but their whole child BOM
+    // is — without this those children scatter as one root each.
+    const imOnlyRoots = groupImOnly(imOnly, imIndex.parentOf, opts && opts.virtualAnchorRows);
 
     // 4) reference components: in the full CAD structure but not in the
     // intended-BOM export — the direct review list for "was this meant to be

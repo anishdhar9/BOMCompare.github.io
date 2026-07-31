@@ -23,6 +23,8 @@
     lldboResult: null,   // js/lldbo-compare.js compareLldbo() result
     materialResult: null, // js/material-compare.js compareMaterial() result
     revisionResult: null, // js/revision-compare.js compareRevision() result
+    titleDescResult: null, // js/titledesc-compare.js compareTitleDescription() result
+    virtualResult: null,   // js/virtual-parts.js detectVirtualParts() result
     findings: null,       // js/findings.js buildRegistry() — cross-check registry
     showGrouped: false,   // "parts needing attention": reveal grouped children
   };
@@ -49,6 +51,7 @@
     else state.cadSources.push(parsed);
     runMaterialCheck();
     runRevisionCheck();
+    runTitleDescCheck();
   }
 
   /* ---------------- column visibility ---------------- */
@@ -147,6 +150,7 @@
         updateCompareButton();
         runMaterialCheck();
         runRevisionCheck();
+        runTitleDescCheck();
       });
       row.appendChild(rm);
       box.appendChild(row);
@@ -215,7 +219,7 @@
         }
       } catch (e) {
         if (role === 'cad') renderCadSources('', file.name + ': ' + (e.message || String(e)));
-        else { state.im = null; state.imQc = null; hideImQc(); setImStatus(file.name, [], e.message || String(e)); runMaterialCheck(); runRevisionCheck(); }
+        else { state.im = null; state.imQc = null; hideImQc(); setImStatus(file.name, [], e.message || String(e)); runMaterialCheck(); runRevisionCheck(); runTitleDescCheck(); }
       }
     }
     updateCompareButton();
@@ -242,6 +246,7 @@
     if (state.lldbo) runLldboCheck();
     runMaterialCheck();
     runRevisionCheck();
+    runTitleDescCheck();
   }
 
   function handleCadWorkbook(file, wb) {
@@ -735,6 +740,8 @@
       imQc: state.imQc,
       materialResult: state.materialResult,
       revisionResult: state.revisionResult,
+      titleDescResult: state.titleDescResult,
+      virtualResult: state.virtualResult,
       lldboResult: state.lldboResult,
     });
   }
@@ -769,6 +776,14 @@
       tiles.push({ num: res.qtyMismatches === null ? '—' : res.qtyMismatches.length, label: 'Quantity mismatches',
         cls: res.qtyMismatches === null ? 'na' : (res.qtyMismatches.length ? 'amber' : 'pass'),
         onClick: function () { jumpTo('results', 'qty'); } });
+      const vres = state.virtualResult;
+      if (vres && vres.applicable) {
+        const vn = vres.confirmed.length + vres.suspected.length;
+        tiles.push({ num: vn, label: 'Virtual parts',
+          sub: vn ? 'no CAD file behind them — child BOM never compared'
+                  : (vres.hasThumbnailColumn ? 'none found ✓' : 'none inferred (no Thumbnail column)'),
+          cls: vn ? 'red' : 'pass', onClick: function () { jumpTo('results', 'virtual'); } });
+      }
       if (res.qtyCascades.applicable) {
         tiles.push({ num: res.qtyCascades.roots.length, label: 'Quantity cascades',
           sub: res.qtyCascades.roots.length ? 'one root cause explains many mismatches — fix it first' : 'no uniform-ratio subtree found ✓',
@@ -1308,6 +1323,95 @@
     return rows;
   }
 
+  /* ---------------- description: CAD vs Item Master ---------------- */
+
+  function hideTitleDescResults() {
+    $('titledesc-sections').innerHTML = '';
+    renderDashboard();
+  }
+
+  function runTitleDescCheck() {
+    if (!state.im) { state.titleDescResult = null; hideTitleDescResults(); return; }
+    state.titleDescResult = BC.titleDescCompare.compareTitleDescription(state.cadSources, state.im);
+    renderTitleDescPanel();
+  }
+
+  const TITLEDESC_MISMATCH_COLS = [['number', 'Part Number'], ['title', 'Title']].concat(LOCATION_COLS).concat(
+    [['imDescription', 'Item Master Description'], ['cadDescription', 'CAD Description']]);
+
+  function renderTitleDescPanel() {
+    const res = state.titleDescResult;
+    const sections = $('titledesc-sections');
+    sections.innerHTML = '';
+    if (!res) return;
+    rebuildFindings(); // rows below are decorated against it
+
+    if (res.applicable) {
+      sections.appendChild(lldboSectionFor(
+        'Description: CAD vs Item Master',
+        'Compares the CAD Description (' + (res.cadSourceFileName ? '"' + res.cadSourceFileName + '"' : 'the loaded CAD source') +
+          ') against the Item Master Description, for every shared part. Case and spacing are ignored; ' +
+          'punctuation and digits are not, so a changed dimension or thread size is still reported. ' +
+          'Purchased "X-999-" parts and parts procured at another site (numbers not starting "7-") are excluded.',
+        TITLEDESC_MISMATCH_COLS, res.mismatches,
+        '✓ CAD and Item Master descriptions agree for every shared part.',
+        'titleDesc'
+      ));
+    } else {
+      const note = document.createElement('div');
+      note.className = 'qc-section';
+      const head = document.createElement('div');
+      head.className = 'qc-section-head';
+      head.innerHTML = '<div class="qc-section-title">Description: CAD vs Item Master</div><span class="qc-pill na">N/A</span>';
+      note.appendChild(head);
+      const body = document.createElement('div');
+      body.className = 'qc-section-body open';
+      body.innerHTML = '<div class="empty-state">' + res.reason + '</div>';
+      note.appendChild(body);
+      sections.appendChild(note);
+    }
+    renderDashboard();
+  }
+
+  function virtualSheetRows(res) {
+    const rows = [['Virtual parts (no CAD file behind them)', '']];
+    if (!res.applicable) {
+      rows.push(['N/A', res.reason]);
+      return rows;
+    }
+    rows.push(['Confirmed (Thumbnail column says "(NULL)")', res.confirmed.length]);
+    rows.push(['Suspected (inferred, no Thumbnail column)', res.suspected.length]);
+    if (res.reason) rows.push(['Note', res.reason]);
+    const all = res.confirmed.concat(res.suspected);
+    if (all.length) {
+      rows.push([]);
+      rows.push(['Confidence', 'Part Number', 'Title', 'Child count', 'Row #', 'Child Number', 'Child Title', 'Child Row #']);
+      for (const v of all) {
+        rows.push([v.confidence, v.number, v.title, v.childCount, v.sourceRow, '', '', '']);
+        for (const c of v.children || []) {
+          rows.push(['', '', '', '', '', c.number, c.title, c.sourceRow]);
+        }
+      }
+    }
+    return rows;
+  }
+
+  function titleDescSheetRows(res) {
+    const rows = [['Description: CAD vs Item Master', '']];
+    if (!res.applicable) {
+      rows.push(['N/A', res.reason]);
+    } else {
+      rows.push(['Mismatches', res.mismatches.length]);
+      rows.push(['Parts compared', res.eligibleCount]);
+      if (res.mismatches.length) {
+        rows.push([]);
+        rows.push(TITLEDESC_MISMATCH_COLS.map(function (c) { return c[1]; }));
+        for (const m of res.mismatches) rows.push(TITLEDESC_MISMATCH_COLS.map(function (c) { return m[c[0]]; }));
+      }
+    }
+    return rows;
+  }
+
   /* ---------------- compare & render ---------------- */
 
   function updateCompareButton() {
@@ -1320,7 +1424,12 @@
   function runCompare() {
     if (!state.cadSources.length || !state.im) return false;
     clearNotices();
-    state.result = BC.compareAll(state.cadSources, state.im);
+    // Virtual parts are detected first: their anchors let the "In Item Master
+    // only" rollup group a virtual subassembly's orphaned children under it,
+    // instead of scattering them as one unexplained finding each.
+    state.virtualResult = BC.virtualParts.detectVirtualParts(state.cadSources, state.im, BC.indexItemMaster);
+    state.result = BC.compareAll(state.cadSources, state.im,
+      { virtualAnchorRows: state.virtualResult.anchorRows });
     const res = state.result;
     if (!res.hasQty) {
       notice('warn', 'None of the CAD BOM sources has a quantity column, so quantity comparison is disabled. ' +
@@ -1397,12 +1506,16 @@
     $('count-ref').textContent = res.referenceRoots === null ? '' : res.referenceRoots.length;
     $('count-qty').textContent = res.qtyMismatches === null ? '—' : res.qtyMismatches.length;
     $('count-cascade').textContent = res.qtyCascades.applicable ? res.qtyCascades.roots.length : '—';
+    const virt = state.virtualResult;
+    $('count-virtual').textContent = virt && virt.applicable
+      ? (virt.confirmed.length + virt.suspected.length) : '—';
     $('count-imonly').textContent = res.imOnlyRoots ? res.imOnlyRoots.length : res.imOnly.length;
 
     renderMissingTab();
     renderRefTab();
     renderQtyTab();
     renderCascadeTab();
+    renderVirtualTab();
     renderImOnlyTab();
     // The Item Master / material / revision sections were rendered when their
     // files loaded — before any comparison existed — so their rows were
@@ -1415,6 +1528,7 @@
         if (state.imQc) renderImQc();
         if (state.materialResult) renderMaterialPanel();
         if (state.revisionResult) renderRevisionPanel();
+        if (state.titleDescResult) renderTitleDescPanel();
         if (state.lldboResult) renderLldboPanel();
       } finally {
         reRendering = false;
@@ -1802,6 +1916,119 @@
     wireExpanders(table);
   }
 
+  /* ----- virtual parts tab ----- */
+
+  // A virtual part is in the CAD BOM but has no CAD file behind it, and its
+  // whole child BOM lives only in the Item Master. Every other check passes
+  // it, so without this tab it is invisible and its children read as
+  // unexplained "In Item Master only" rows.
+  function renderVirtualTab() {
+    const pane = $('pane-virtual');
+    const res = state.virtualResult;
+    pane.innerHTML = '';
+    if (!res || !res.applicable) {
+      pane.innerHTML = '<div class="empty-state">' +
+        ((res && res.reason) || 'Load a CAD BOM and an Item Master to check for virtual parts.') + '</div>';
+      return;
+    }
+    const intro = document.createElement('p');
+    intro.className = 'pane-intro';
+    intro.textContent = 'A virtual part is a BOM entry with no CAD file behind it. It passes every other check ' +
+      '(it is in both BOMs), but the parts underneath it exist only in the Item Master, so they never get compared. ' +
+      (res.hasThumbnailColumn
+        ? 'Detected exactly, from the Inventor export’s Thumbnail column.'
+        : res.reason);
+    pane.appendChild(intro);
+
+    const all = (res.confirmed || []).concat(res.suspected || []);
+    if (!all.length) {
+      const d = document.createElement('div');
+      d.className = 'empty-state';
+      d.textContent = 'No virtual parts found — every CAD assembly has its child parts in the CAD BOM too.';
+      pane.appendChild(d);
+      return;
+    }
+    const rows = all.filter(function (v) { return matchesFilter([v.number, v.title, v.description]); });
+    if (!rows.length) {
+      pane.innerHTML = '<div class="empty-state">Nothing matches the filter.</div>';
+      return;
+    }
+    const table = document.createElement('table');
+    table.className = 'results-table';
+    const htr = document.createElement('tr');
+    addTh(htr, '');
+    addTh(htr, 'Part Number');
+    addTh(htr, 'Title');
+    addTh(htr, 'Children only in Item Master');
+    addTh(htr, 'Row #');
+    table.appendChild(htr);
+
+    let uid = 0;
+    for (const v of rows) {
+      const id = 'vp' + (uid++);
+      const tr = document.createElement('tr');
+      tr.className = 'row-missing';
+      const tdExp = document.createElement('td');
+      const exp = document.createElement('span');
+      exp.className = 'expander';
+      exp.textContent = '▸';
+      exp.dataset.for = id;
+      tdExp.appendChild(exp);
+      tr.appendChild(tdExp);
+      const tdNum = document.createElement('td');
+      tdNum.className = 'num-cell';
+      tdNum.textContent = v.number + ' ';
+      if (v.confidence === 'suspected') {
+        const b = document.createElement('span');
+        b.className = 'badge grouped';
+        b.textContent = 'suspected';
+        b.title = 'Inferred from BOM structure — include the Thumbnail column in the Inventor export to confirm.';
+        tdNum.appendChild(b);
+      }
+      tr.appendChild(tdNum);
+      decorateSecondary(tr, 'virtualPart', v.number, tdNum);
+      addTd(tr, v.title);
+      addTd(tr, String(v.childCount));
+      addTd(tr, v.sourceRow || '');
+      table.appendChild(tr);
+
+      const br = document.createElement('tr');
+      br.className = 'hidden-row';
+      br.dataset.id = id;
+      const td = document.createElement('td');
+      td.colSpan = htr.children.length;
+      const box = document.createElement('div');
+      box.className = 'qty-breakdown';
+      const cap = document.createElement('div');
+      cap.textContent = 'These parts sit under it in the Item Master but are absent from the CAD BOM:';
+      box.appendChild(cap);
+      const t = document.createElement('table');
+      const h = document.createElement('tr');
+      ['Part Number', 'Title', 'Item Master Row #'].forEach(function (x) { addTh(h, x); });
+      t.appendChild(h);
+      for (const c of v.children || []) {
+        const ctr = document.createElement('tr');
+        addTd(ctr, c.number);
+        addTd(ctr, c.title);
+        addTd(ctr, c.sourceRow || '');
+        t.appendChild(ctr);
+      }
+      box.appendChild(t);
+      td.appendChild(box);
+      br.appendChild(td);
+      table.appendChild(br);
+    }
+    pane.appendChild(table);
+    table.addEventListener('click', function (ev) {
+      const e = ev.target.closest('.expander');
+      if (!e) return;
+      const row = table.querySelector('tr[data-id="' + e.dataset.for + '"]');
+      const open = e.textContent === '▾';
+      e.textContent = open ? '▸' : '▾';
+      if (row) row.classList.toggle('hidden-row', open);
+    });
+  }
+
   /* ----- IM-only tab ----- */
 
   // Rendered as a tree over the Item Master's own hierarchy: when a whole
@@ -1922,7 +2149,7 @@
   function switchTab(name) {
     state.activeTab = name;
     document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === name); });
-    ['missing', 'ref', 'qty', 'cascade', 'imonly'].forEach(function (n) {
+    ['missing', 'ref', 'qty', 'cascade', 'virtual', 'imonly'].forEach(function (n) {
       $('pane-' + n).classList.toggle('hidden', n !== name);
     });
   }
@@ -2089,6 +2316,14 @@
 
     if (state.revisionResult) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(revisionSheetRows(state.revisionResult)), 'Revision vs CAD');
+    }
+
+    if (state.titleDescResult) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(titleDescSheetRows(state.titleDescResult)), 'Description vs CAD');
+    }
+
+    if (state.virtualResult) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(virtualSheetRows(state.virtualResult)), 'Virtual parts');
     }
 
     if (state.lldboResult) {

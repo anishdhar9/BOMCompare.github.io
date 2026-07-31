@@ -47,6 +47,11 @@
     file: ['file', 'file name', 'filename', 'dateiname', 'document'],
     material: ['material', 'werkstoff'],
     revision: ['revision', 'rev', 'rev.'],
+    // Inventor exports the thumbnail column as an EMPTY cell when a CAD file
+    // backs the row, and as the literal text "(NULL)" when none does. That
+    // makes "(NULL)" the marker for a virtual component (a BOM entry with no
+    // model behind it). The column is user-configurable, so it is often absent.
+    thumbnail: ['thumbnail', 'preview', 'image'],
   };
 
   function matchField(headerText) {
@@ -149,7 +154,7 @@
     const cNumber = col('number'), cQty = col('qty'), cLevel = col('level'),
           cPos = col('pos'), cTitle = col('title'), cDesc = col('description'),
           cFile = col('file'), cStructure = col('structure'), cMaterial = col('material'),
-          cRevision = col('revision');
+          cRevision = col('revision'), cThumbnail = col('thumbnail');
 
     const items = [];
     const rawIndents = [];
@@ -194,6 +199,10 @@
         revision: cRevision >= 0 ? cellText(row[cRevision]) : '',
         bomStructure: bomStructure,
         isReference: /reference/i.test(bomStructure),
+        // "(NULL)" means Inventor has no CAD file behind this row; an empty
+        // cell means it does. Only the explicit "(NULL)" counts, so a export
+        // without the column never looks like every row is virtual.
+        thumbnailMissing: cThumbnail >= 0 && /^\(NULL\)$/i.test(cellText(row[cThumbnail])),
         sourceRow: r + 1,
       });
     }
@@ -241,6 +250,11 @@
       hasStructure: cStructure >= 0,
       hasMaterial: hasMaterial,
       hasRevision: hasRevision,
+      // Header presence alone, unlike hasMaterial/hasRevision which also
+      // require a non-empty value: a clean export with no virtual components
+      // has an entirely empty Thumbnail column, and that must read as
+      // "checked, none found" rather than "column missing".
+      hasThumbnail: cThumbnail >= 0,
       items: items,
       columns: cols,
       headerRow: headerRow,

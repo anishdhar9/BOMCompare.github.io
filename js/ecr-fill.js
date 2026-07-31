@@ -71,7 +71,7 @@
   // top-level row or when the export has no Row Order column.
   function parentComposite(row, imIndex) {
     if (!Array.isArray(row.path) || row.path.length === 0) return '';
-    const parent = imIndex.byPath.get(row.path.slice(0, -1).join('.'));
+    const parent = imIndex.parentOf.get(row);
     if (!parent) return '';
     return itemNoWithRev(parent);
   }

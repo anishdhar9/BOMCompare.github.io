@@ -24,6 +24,16 @@
 
   const END_OF_LINE_NUMBER = '7-909-00001';
 
+  // The "END OF LINE" sentinel that closes a released BOM. Matched on text
+  // rather than on END_OF_LINE_NUMBER, because Check 2's whole job is to
+  // catch the case where that row carries the WRONG number. It is a marker,
+  // not a real part, so material checks skip it (it legitimately carries a
+  // placeholder material such as ".").
+  function isEndOfLine(row) {
+    const t = ((row.title || '') + ' ' + (row.description || '')).toUpperCase();
+    return t.indexOf('END OF LINE') !== -1;
+  }
+
   function isRoot(row) {
     return Array.isArray(row.path) && row.path.length === 0;
   }
@@ -32,24 +42,30 @@
     return Array.isArray(row.path) ? row.path.join('.') : '';
   }
 
-  // Maps 'path.key' -> row, for O(1) parent lookup. Same key shape as
-  // compare.js's indexItemMaster byPath (first occurrence at a position
-  // wins), reimplemented locally to keep imqc.js dependency-free.
+  // Maps row -> its true parent row, resolved POSITIONALLY (file order plus
+  // Row Order depth) rather than by Row Order string. Real exports reuse a
+  // position for adjacent siblings, so a path-string lookup attributes a
+  // child to whichever branch came first. Mirrors compare.js's
+  // buildParentIndex — kept as its own copy to keep imqc.js dependency-free
+  // (see the file header); change both together.
   function buildPathIndex(rows) {
-    var byPath = new Map();
+    var parentOfRow = new Map();
+    var stack = []; // {depth, row}
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
-      if (Array.isArray(row.path) && !byPath.has(row.path.join('.'))) byPath.set(row.path.join('.'), row);
+      if (!Array.isArray(row.path)) continue;
+      var depth = row.path.length;
+      while (stack.length && stack[stack.length - 1].depth >= depth) stack.pop();
+      if (stack.length) parentOfRow.set(row, stack[stack.length - 1].row);
+      stack.push({ depth: depth, row: row });
     }
-    return byPath;
+    return parentOfRow;
   }
 
-  // The immediate parent row (by Row Order path) for `row`, or null when
-  // `row` is the root row, has no path, or its parent position is a gap in
-  // this export.
+  // The immediate parent row for `row`, or null when `row` is the root row,
+  // has no path, or its parent position is a gap in this export.
   function parentOf(pathIndex, row) {
-    if (!Array.isArray(row.path) || row.path.length === 0) return null;
-    var parent = pathIndex.get(row.path.slice(0, -1).join('.'));
+    var parent = pathIndex.get(row);
     return parent ? { number: parent.number, title: parent.title || '' } : null;
   }
 
@@ -101,10 +117,7 @@
   // Check 2: the "END OF LINE" row must carry the org's fixed part number and
   // a whole-number Row Order (no decimal level).
   function checkEndOfLine(im, pathIndex) {
-    const eolRows = im.rows.filter(function (row) {
-      const t = ((row.title || '') + ' ' + (row.description || '')).toUpperCase();
-      return t.indexOf('END OF LINE') !== -1;
-    });
+    const eolRows = im.rows.filter(isEndOfLine);
     const fail = [];
     if (!eolRows.length) {
       fail.push({ number: '—', rowOrder: '—', issue: 'No "END OF LINE" entry found in the BOM.', sourceRow: '', parentNumber: '', parentTitle: '' });
@@ -140,6 +153,7 @@
     }
     const fail = [];
     for (const row of im.rows) {
+      if (isEndOfLine(row)) continue; // ERP completeness marker, not a part
       if (row.quantity === null && row.itemQty === null) continue;
       if (row.quantity === null || row.itemQty === null || row.quantity !== row.itemQty) {
         fail.push(withLocation({
@@ -162,6 +176,7 @@
     }
     const fail = [];
     for (const row of im.rows) {
+      if (isEndOfLine(row)) continue; // ERP completeness marker, not a part
       const icon = (row.entityIcon || '').toUpperCase();
       if (icon !== 'NORMAL') {
         fail.push(withLocation({ number: row.number, rowOrder: rowOrderText(row) || '-', icon: row.entityIcon || '(blank)' }, pathIndex, row));
@@ -174,6 +189,17 @@
   // number is a purchased/catalog part (bearings, screws, o-rings...),
   // everything else is manufactured in-house.
   const PURCHASED_PART_RE = /^\d-999-/;
+
+  // Only "7-" numbers are made/controlled at this site. A leading 1-, 2-, 3-,
+  // 5- ... is procured from another of the organization's locations, so a
+  // missing or differing field on one is not something this site can act on;
+  // those rows are excluded from the data-quality and CAD-comparison checks
+  // rather than reported as unfixable noise.
+  const MANUFACTURED_PART_RE = /^7-/;
+
+  function isOwnPart(number) {
+    return MANUFACTURED_PART_RE.test(String(number || '').trim());
+  }
 
   function blank(v) {
     const s = (v || '').trim();
@@ -188,6 +214,8 @@
   function checkTitleDescription(im, pathIndex) {
     const fail = [];
     for (const row of im.rows) {
+      if (isEndOfLine(row)) continue; // ERP completeness marker, not a part
+      if (!isOwnPart(row.number)) continue; // procured at another site — not actionable here
       const titleBlank = blank(row.title);
       const descBlank = blank(row.description);
       if (!titleBlank && !descBlank) continue;
@@ -207,22 +235,16 @@
     return { applicable: true, fail: fail };
   }
 
-  // A Row Order path is an "assembly" if some other row's path is a strict
-  // child of it (starts with path + '.'); the root ('-' -> []) always
-  // counts. Same principle compare.js's indexItemMaster uses for childSets,
-  // reimplemented locally to keep imqc.js dependency-free.
-  function buildAssemblyPathSet(rows) {
-    const paths = [];
+  // A row is an "assembly" if it is some other row's parent. Derived from the
+  // positional parent index rather than by matching Row Order path prefixes,
+  // so a position reused by two different parts cannot make a leaf look like
+  // an assembly (or vice versa). Returns a Set of row objects.
+  function buildAssemblySet(rows, pathIndex) {
+    const idx = pathIndex || buildPathIndex(rows);
+    const assemblies = new Set();
     for (const row of rows) {
-      if (Array.isArray(row.path)) paths.push(row.path.join('.'));
-    }
-    const assemblies = new Set(['']); // root
-    for (const p of paths) {
-      if (p === '' || assemblies.has(p)) continue;
-      const prefix = p + '.';
-      for (const q of paths) {
-        if (q !== p && q.indexOf(prefix) === 0) { assemblies.add(p); break; }
-      }
+      const parent = idx.get(row);
+      if (parent) assemblies.add(parent);
     }
     return assemblies;
   }
@@ -242,12 +264,14 @@
     if (!im.hasPaths) {
       return { applicable: false, reason: 'No "Row Order" column found — cannot tell assemblies from parts.' };
     }
-    const assemblies = buildAssemblyPathSet(im.rows);
+    const assemblies = buildAssemblySet(im.rows, pathIndex);
     const fail = [];
     for (const row of im.rows) {
       if (!Array.isArray(row.path)) continue;
       if (PURCHASED_PART_RE.test(row.number)) continue; // handled by the Bought-Out Parts panel instead
-      if (assemblies.has(row.path.join('.'))) continue; // assembly, material not expected
+      if (!isOwnPart(row.number)) continue; // procured at another site — not actionable here
+      if (isEndOfLine(row)) continue; // sentinel marker row, not a real part
+      if (assemblies.has(row)) continue; // assembly, material not expected
       if (blank(row.material)) {
         fail.push(withLocation({ number: row.number, rowOrder: rowOrderText(row) || '-', title: row.title }, pathIndex, row));
       }
@@ -294,6 +318,7 @@
     var byPn = new Map(); // normalized PN -> [row, ...]
     for (var i = 0; i < im.rows.length; i++) {
       var row = im.rows[i];
+      if (isEndOfLine(row)) continue; // ERP completeness marker, not a part
       var key = String(row.number).trim().toUpperCase();
       if (!key) continue;
       if (!byPn.has(key)) byPn.set(key, []);
@@ -330,11 +355,13 @@
   function ancestorTrail(pathIndex, row) {
     if (!Array.isArray(row.path) || row.path.length === 0) return '';
     var parts = [];
-    for (var i = 1; i < row.path.length; i++) {
-      var anc = pathIndex.get(row.path.slice(0, i).join('.'));
-      if (!anc) continue;
+    // Walk up the real parent chain, then reverse: the trail reads top-level
+    // assembly first. The root row itself (depth 0) is not part of the trail.
+    for (var anc = pathIndex.get(row); anc; anc = pathIndex.get(anc)) {
+      if (!Array.isArray(anc.path) || anc.path.length === 0) break;
       parts.push(anc.number + (anc.title ? ' (' + anc.title + ')' : ''));
     }
+    parts.reverse();
     return parts.join(' › ');
   }
 
@@ -388,6 +415,7 @@
     var errorCount = 0, warnCount = 0;
     for (var i = 0; i < im.rows.length; i++) {
       var row = im.rows[i];
+      if (isEndOfLine(row)) continue; // ERP completeness marker, not a part
       var kind = classifyState(row.state);
       if (kind !== 'error' && kind !== 'warn') continue;
       if (kind === 'error') errorCount++; else warnCount++;
@@ -426,8 +454,11 @@
       boughtOutParts: boughtOutParts,
       END_OF_LINE_NUMBER: END_OF_LINE_NUMBER,
       PURCHASED_PART_RE: PURCHASED_PART_RE,
+      MANUFACTURED_PART_RE: MANUFACTURED_PART_RE,
       SKETCH_PART_RE: SKETCH_PART_RE,
-      buildAssemblyPathSet: buildAssemblyPathSet,
+      isOwnPart: isOwnPart,
+      isEndOfLine: isEndOfLine,
+      buildAssemblySet: buildAssemblySet,
       buildPathIndex: buildPathIndex,
       parentOf: parentOf,
       ancestorTrail: ancestorTrail,

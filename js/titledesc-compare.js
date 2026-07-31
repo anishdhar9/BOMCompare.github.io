@@ -1,0 +1,130 @@
+/*
+ * titledesc-compare.js — compares the CAD BOM's Description against the Item
+ * Master's Description for the same part number.
+ *
+ * Which Item Master field to compare against was settled from real data
+ * rather than assumed: across a 2049-row Inventor export, the CAD Description
+ * matched the Item Master's DESCRIPTION on 73% of shared parts but its TITLE
+ * on only 1%. The Item Master's Title is the catalogue name ("Ventilation
+ * Tube") while its Description carries the same free text the CAD model does
+ * ("GCSmart 2010"), so Description-to-Description is the real pairing.
+ *
+ * Normalization is deliberately light — case and whitespace only, with
+ * whitespace removed entirely rather than merely collapsed (the same thing
+ * material-compare.js's stripFormatting does). The differences worth catching
+ * sit in the punctuation and digits, which stay significant: "OD 539 X 4 THK."
+ * vs "OD 539 X 3 THK.", "G 1/4" vs "G 1/8", "With 30MM SKIRTING" vs
+ * "With 27MM SKIRTING". Removing whitespace outright absorbs the noise a mere
+ * collapse would miss, where the stray space sits INSIDE a token:
+ * "TANK - 300LTRS" vs "TANK - 300 LTRS", "GCPilot" vs "GC Pilot".
+ *
+ * Skipped rows: parts that are not this site's own "7-" numbers (procured
+ * from other company locations, nothing actionable here), "X-999-*"
+ * purchased/catalog parts (their descriptions are supplier text and differ
+ * constantly — on the sample export 158 of them had no Item Master
+ * description at all), the END OF LINE marker row, and any row where either
+ * side is blank. Assemblies are NOT skipped: unlike material, an assembly
+ * does carry a description.
+ *
+ * Pure logic (no DOM). `imQc` is injected, matching revision-compare.js.
+ */
+(function (root, factory) {
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = factory(require('./imqc.js').imQc);
+  } else {
+    const bc = root.BOMCompare || {};
+    root.BOMCompare = Object.assign(bc, factory(bc.imQc));
+  }
+})(typeof self !== 'undefined' ? self : this, function (imQc) {
+  'use strict';
+
+  // Case-insensitive, whitespace removed. Everything else is significant.
+  function normText(v) {
+    return String(v || '').trim().toUpperCase().replace(/\s+/g, '');
+  }
+
+  function descriptionsMatch(a, b) {
+    var na = normText(a), nb = normText(b);
+    if (!na || !nb) return false;
+    return na === nb;
+  }
+
+  // First loaded CAD source that actually carries description text, and a
+  // lookup of its first-seen description per PN. Mirrors
+  // revision-compare.js's cadRevisionByPn.
+  function cadDescriptionByPn(cadSources) {
+    for (var i = 0; i < cadSources.length; i++) {
+      var src = cadSources[i];
+      var map = new Map();
+      var any = false;
+      for (var j = 0; j < src.items.length; j++) {
+        var it = src.items[j];
+        var pn = String(it.number || '').trim().toUpperCase();
+        var desc = (it.description || '').trim();
+        if (!pn || !desc) continue;
+        any = true;
+        if (!map.has(pn)) map.set(pn, desc);
+      }
+      if (any) return { source: src, byPn: map };
+    }
+    return null;
+  }
+
+  // cadSources: the array passed to compareAll (0-2 CAD sources).
+  function compareTitleDescription(cadSources, im) {
+    var cad = cadDescriptionByPn(cadSources || []);
+    if (!cad) {
+      return {
+        applicable: false,
+        reason: 'No loaded CAD source carries description text. The Vault multi-level PDF does not; ' +
+          'the Inventor BOM export does when the Description column is included.',
+        mismatches: [],
+      };
+    }
+
+    var pathIndex = imQc.buildPathIndex(im.rows);
+    var mismatches = [];
+    var eligible = 0;
+    var seenPn = new Set(); // same part can occur at several BOM positions; report it once
+    for (var i = 0; i < im.rows.length; i++) {
+      var row = im.rows[i];
+      var pnKey = String(row.number).trim().toUpperCase();
+      if (!pnKey || seenPn.has(pnKey)) continue;
+      if (!imQc.isOwnPart(row.number)) continue;            // procured at another site
+      if (imQc.PURCHASED_PART_RE.test(row.number)) continue; // supplier catalogue text
+      if (imQc.isEndOfLine(row)) continue;                   // ERP completeness marker
+      if (imQc.blank(row.description)) continue;             // Check 5 covers "IM description missing"
+      var cadDesc = cad.byPn.get(pnKey);
+      if (!cadDesc) continue; // part not in this CAD source, or CAD has no description for it
+      eligible++;
+      if (!descriptionsMatch(row.description, cadDesc)) {
+        seenPn.add(pnKey);
+        var parent = imQc.parentOf(pathIndex, row);
+        mismatches.push({
+          number: row.number,
+          title: row.title || '',
+          imDescription: row.description,
+          cadDescription: cadDesc,
+          sourceRow: row.sourceRow,
+          parentNumber: parent ? parent.number : '',
+          parentTitle: parent ? parent.title : '',
+        });
+      }
+    }
+
+    return {
+      applicable: true,
+      cadSourceFileName: cad.source.fileName || '',
+      eligibleCount: eligible,
+      mismatches: mismatches,
+    };
+  }
+
+  return {
+    titleDescCompare: {
+      compareTitleDescription: compareTitleDescription,
+      descriptionsMatch: descriptionsMatch,
+      normText: normText,
+    },
+  };
+});
