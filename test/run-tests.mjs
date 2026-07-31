@@ -31,6 +31,8 @@ const { folder } = require(path.join(rootDir, 'js/folder.js'));
 const { lldboParser } = require(path.join(rootDir, 'js/parsers/lldbo.js'));
 const { lldboCompare } = require(path.join(rootDir, 'js/lldbo-compare.js'));
 const { imDiffCompare } = require(path.join(rootDir, 'js/im-diff-compare.js'));
+const { titleDescCompare } = require(path.join(rootDir, 'js/titledesc-compare.js'));
+const { virtualParts } = require(path.join(rootDir, 'js/virtual-parts.js'));
 const { ecrFill } = require(path.join(rootDir, 'js/ecr-fill.js'));
 
 let failures = 0;
@@ -265,6 +267,189 @@ console.log('\n== synthetic: ECR sheet generation (diffForEcr / fillEcrTemplate)
   }
 }
 
+console.log('\n== synthetic: positional ancestor resolution (duplicate Row Order positions) ==');
+{
+  // Real exports reuse a Row Order position for adjacent siblings. Here
+  // "1.1" appears twice: the second one (PART-SECOND) is the true parent of
+  // the row at "1.1.1" that follows it. A path-string lookup returns the
+  // FIRST "1.1" row instead, mis-parenting the child and, through the
+  // ancestor multipliers, inflating its rolled-up quantity.
+  const aoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity'],
+    ['7-000-ROOT', '-', 'Machine', 'desc', '-'],
+    ['7-100-BRANCH', '1', 'Branch', 'desc', '1 Each'],
+    ['7-100-FIRST', '1.1', 'First at this position', 'desc', '5 Each'],
+    ['7-100-FIRST-KID', '1.1.1', 'Child of FIRST', 'desc', '1 Each'],
+    ['7-100-SECOND', '1.1', 'Second at the SAME position', 'desc', '2 Each'],
+    ['7-100-SECOND-KID', '1.1.1', 'Child of SECOND', 'desc', '3 Each'],
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => aoa },
+  });
+  const idx = indexItemMaster(im);
+  const rowOf = (n) => im.rows.find(r => r.number === n);
+
+  check('duplicate Row Order positions are still reported as a warning',
+    idx.warnings.some(w => /share a "Row Order" position/.test(w)), idx.warnings);
+  check('the second child resolves to the SECOND row at the reused position, not the first',
+    idx.parentOf.get(rowOf('7-100-SECOND-KID')) === rowOf('7-100-SECOND'),
+    idx.parentOf.get(rowOf('7-100-SECOND-KID')) && idx.parentOf.get(rowOf('7-100-SECOND-KID')).number);
+  check('the first child still resolves to the first row at that position',
+    idx.parentOf.get(rowOf('7-100-FIRST-KID')) === rowOf('7-100-FIRST'),
+    idx.parentOf.get(rowOf('7-100-FIRST-KID')) && idx.parentOf.get(rowOf('7-100-FIRST-KID')).number);
+  check('a depth-1 row resolves to the root row', idx.parentOf.get(rowOf('7-100-BRANCH')) === rowOf('7-000-ROOT'));
+  check('the root row itself has no parent', idx.parentOf.get(rowOf('7-000-ROOT')) === undefined);
+  // SECOND-KID: own 3 x SECOND 2 x BRANCH 1 = 6. Under the old path-string
+  // lookup its ancestor would have been FIRST (qty 5), giving 15.
+  check('rolled-up quantity uses the correct ancestor chain (3 x 2 x 1 = 6, not 3 x 5 x 1 = 15)',
+    idx.totals.get('7-100-SECOND-KID') === 6, idx.totals.get('7-100-SECOND-KID'));
+  check('childRows attributes each child to its real parent',
+    (idx.childRows.get('7-100-SECOND') || []).length === 1 &&
+    idx.childRows.get('7-100-SECOND')[0].number === '7-100-SECOND-KID',
+    (idx.childRows.get('7-100-SECOND') || []).map(r => r.number));
+}
+
+console.log('\n== synthetic: Description CAD vs Item Master (titledesc-compare) ==');
+{
+  const M = titleDescCompare.descriptionsMatch;
+  check('case is ignored', M('gcpilot', 'GCPilot') === true);
+  check('spacing inside a token is ignored: "TANK - 300LTRS" == "TANK - 300 LTRS"',
+    M('TANK - 300LTRS', 'TANK - 300 LTRS') === true);
+  check('spacing is ignored: "GCPilot" == "GC Pilot"', M('GCPilot', 'GC Pilot') === true);
+  check('a changed dimension is NOT absorbed: "OD 539 X 4 THK." != "OD 539 X 3 THK."',
+    M('OD 539 X 4 THK.', 'OD 539 X 3 THK.') === false);
+  check('a changed thread size is NOT absorbed: "G 1/4" != "G 1/8"',
+    M('G 1/4, Dia. 7.5', 'G 1/8, Dia. 7.5') === false);
+  check('punctuation stays significant: "A - B" != "A + B"', M('A - B', 'A + B') === false);
+  check('blank never matches', M('', 'x') === false && M('x', '') === false);
+
+  const imAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)'],
+    ['7-000-ROOT', '-', 'Machine', 'Machine desc'],
+    ['7-100-SAME', '1', 'Same', 'PIPE OD38.1X1.6'],
+    ['7-100-DIFF', '2', 'Differs', 'OD 539 X 3 THK.'],
+    ['7-100-SPACING', '3', 'Spacing only', 'TANK - 300 LTRS'],
+    ['7-999-00001', '4', 'Purchased', 'supplier text A'],
+    ['2-100-PROCURED', '5', 'Procured elsewhere', 'something else'],
+    ['7-909-00001', '6', 'END OF LINE', 'marker text'],
+    ['7-100-IMBLANK', '7', 'IM blank', ''],
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => imAoa },
+  });
+  const cadSource = {
+    kind: 'cad', source: 'leveled-sheet', hasQty: false, items: [
+      { number: '7-100-SAME', description: 'PIPE OD38.1X1.6' },
+      { number: '7-100-DIFF', description: 'OD 539 X 4 THK.' },
+      { number: '7-100-SPACING', description: 'TANK - 300LTRS' },
+      { number: '7-999-00001', description: 'supplier text B' },
+      { number: '2-100-PROCURED', description: 'a different thing' },
+      { number: '7-909-00001', description: 'anything at all' },
+      { number: '7-100-IMBLANK', description: 'CAD has one' },
+    ],
+  };
+  const res = titleDescCompare.compareTitleDescription([cadSource], im);
+  check('applicable when a CAD source carries descriptions', res.applicable === true, res.reason);
+  check('only the genuine difference is flagged',
+    res.mismatches.length === 1 && res.mismatches[0].number === '7-100-DIFF',
+    res.mismatches.map(m => m.number));
+  check('spacing-only difference is not flagged', !res.mismatches.some(m => m.number === '7-100-SPACING'));
+  check('purchased X-999 part is excluded', !res.mismatches.some(m => m.number === '7-999-00001'));
+  check('non-7 procured part is excluded', !res.mismatches.some(m => m.number === '2-100-PROCURED'));
+  check('END OF LINE marker is excluded', !res.mismatches.some(m => m.number === '7-909-00001'));
+  check('a blank Item Master description is left to Check 5, not flagged here',
+    !res.mismatches.some(m => m.number === '7-100-IMBLANK'));
+  check('mismatch carries both values and location', res.mismatches[0].imDescription === 'OD 539 X 3 THK.' &&
+    res.mismatches[0].cadDescription === 'OD 539 X 4 THK.' && res.mismatches[0].sourceRow > 1,
+    res.mismatches[0]);
+
+  const noCad = titleDescCompare.compareTitleDescription([{ items: [{ number: 'X', description: '' }] }], im);
+  check('not applicable when no CAD source carries description text', noCad.applicable === false, noCad.reason);
+}
+
+console.log('\n== synthetic: virtual parts (no CAD file behind a subassembly) ==');
+{
+  // VIRT-A is in CAD with thumbnail "(NULL)" and all 2 of its Item Master
+  // children absent from CAD -> confirmed virtual.
+  // REAL-B is in CAD with a thumbnail and its children in CAD -> not virtual.
+  // PARTIAL-C has children but one of them IS in CAD -> a real assembly.
+  const imAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)'],
+    ['7-000-ROOT', '-', 'Machine', 'desc'],
+    ['7-100-VIRT-A', '1', 'Virtual assembly', 'desc'],
+    ['7-100-VA-KID1', '1.1', 'Kid 1', 'desc'],
+    ['7-100-VA-KID2', '1.2', 'Kid 2', 'desc'],
+    ['7-100-REAL-B', '2', 'Real assembly', 'desc'],
+    ['7-100-RB-KID1', '2.1', 'Kid 1', 'desc'],
+    ['7-100-PARTIAL-C', '3', 'Partly modelled', 'desc'],
+    ['7-100-PC-KID1', '3.1', 'In CAD', 'desc'],
+    ['7-100-PC-KID2', '3.2', 'Not in CAD', 'desc'],
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => imAoa },
+  });
+  const withThumb = {
+    kind: 'cad', source: 'leveled-sheet', hasThumbnail: true, items: [
+      { number: '7-100-VIRT-A', thumbnailMissing: true },
+      { number: '7-100-REAL-B', thumbnailMissing: false },
+      { number: '7-100-RB-KID1', thumbnailMissing: false },
+      { number: '7-100-PARTIAL-C', thumbnailMissing: true },
+      { number: '7-100-PC-KID1', thumbnailMissing: false },
+    ],
+  };
+  const res = virtualParts.detectVirtualParts([withThumb], im, indexItemMaster);
+  check('applicable with a Thumbnail column present', res.applicable === true && res.hasThumbnailColumn === true);
+  check('exactly one confirmed virtual part (VIRT-A)',
+    res.confirmed.length === 1 && res.confirmed[0].number === '7-100-VIRT-A', res.confirmed.map(v => v.number));
+  check('it reports both orphaned children', res.confirmed[0].childCount === 2 &&
+    res.confirmed[0].children.map(c => c.number).join(',') === '7-100-VA-KID1,7-100-VA-KID2',
+    res.confirmed[0].children);
+  check('a modelled assembly whose children are in CAD is not virtual',
+    !res.confirmed.some(v => v.number === '7-100-REAL-B'));
+  check('an assembly with SOME children in CAD is not virtual, even with a (NULL) thumbnail',
+    !res.confirmed.some(v => v.number === '7-100-PARTIAL-C'));
+  check('nothing is "suspected" when the Thumbnail column is available', res.suspected.length === 0);
+  check('anchorRows exposes the virtual part for imOnly grouping', res.anchorRows.has('7-100-VIRT-A'));
+
+  // Without the Thumbnail column, fall back to the >=3-orphan-child rule.
+  const noThumb = {
+    kind: 'cad', source: 'leveled-sheet', hasThumbnail: false, items: [
+      { number: '7-100-VIRT-A' }, { number: '7-100-REAL-B' }, { number: '7-100-RB-KID1' },
+      { number: '7-100-PARTIAL-C' }, { number: '7-100-PC-KID1' },
+    ],
+  };
+  const fb = virtualParts.detectVirtualParts([noThumb], im, indexItemMaster);
+  check('fallback: 2 orphan children is below the threshold, so nothing is reported',
+    fb.applicable === true && fb.hasThumbnailColumn === false &&
+    fb.confirmed.length === 0 && fb.suspected.length === 0,
+    { confirmed: fb.confirmed.length, suspected: fb.suspected.length });
+  check('fallback explains that the Thumbnail column would give an exact answer',
+    /Thumbnail/.test(fb.reason), fb.reason);
+
+  const imBig = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: {
+      sheet_to_json: () => [
+        ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)'],
+        ['7-000-ROOT', '-', 'Machine', 'desc'],
+        ['7-100-VIRT-A', '1', 'Virtual assembly', 'desc'],
+        ['7-100-K1', '1.1', 'K1', 'desc'], ['7-100-K2', '1.2', 'K2', 'desc'], ['7-100-K3', '1.3', 'K3', 'desc'],
+      ],
+    },
+  });
+  const fb3 = virtualParts.detectVirtualParts(
+    [{ kind: 'cad', hasThumbnail: false, items: [{ number: '7-100-VIRT-A' }] }], imBig, indexItemMaster);
+  check('fallback: 3 orphan children meets the threshold and is reported as suspected',
+    fb3.suspected.length === 1 && fb3.suspected[0].number === '7-100-VIRT-A' &&
+    fb3.suspected[0].confidence === 'suspected', fb3.suspected.map(v => v.number));
+
+  const noPaths = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => [['Number', 'Title (Item,CO)'], ['7-100-A', 'A']] },
+  });
+  const na = virtualParts.detectVirtualParts([withThumb], noPaths, indexItemMaster);
+  check('not applicable without a Row Order column (degrades, does not crash)',
+    na.applicable === false && /Row Order/.test(na.reason), na.reason);
+}
+
 console.log('\n== synthetic: quantity-cascade detection (detectQuantityCascades) ==');
 {
   // ASSY-P: all 5 direct children released at a clean 2x in the Item Master
@@ -342,6 +527,35 @@ console.log('\n== synthetic: leveled CAD parsing captures Material column ==');
   check('hasMaterial false when no Material column exists', cadNoMat.hasMaterial === false, cadNoMat.hasMaterial);
   check('werkstoff (German) recognized as a material header',
     cadLeveledParser.parse([['Number', 'Werkstoff'], ['PART-A', 'AISI 316']], { source: 'leveled-sheet' }).hasMaterial === true);
+}
+
+console.log('\n== synthetic: leveled CAD parsing captures Thumbnail column ==');
+{
+  // Inventor writes an EMPTY cell when a CAD file backs the row and the
+  // literal text "(NULL)" when none does, so only "(NULL)" counts.
+  const aoa = [
+    ['Item', 'Part Number', 'Thumbnail', 'BOM Structure', 'QTY'],
+    ['1', '7-100-HASFILE', '', 'Normal', '1'],
+    ['2', '7-100-VIRTUAL', '(NULL)', 'Normal', '1'],
+  ];
+  const cad = cadLeveledParser.parse(aoa, { source: 'leveled-sheet' });
+  check('Thumbnail column detected', cad.hasThumbnail === true);
+  check('empty thumbnail cell means a CAD file exists',
+    cad.items.find(i => i.number === '7-100-HASFILE').thumbnailMissing === false);
+  check('"(NULL)" thumbnail marks a virtual component',
+    cad.items.find(i => i.number === '7-100-VIRTUAL').thumbnailMissing === true);
+
+  const noCol = cadLeveledParser.parse([['Item', 'Part Number', 'QTY'], ['1', '7-100-A', '1']], { source: 'leveled-sheet' });
+  check('hasThumbnail false when the column is absent', noCol.hasThumbnail === false);
+  check('no row looks virtual when the column is absent',
+    noCol.items.every(i => i.thumbnailMissing === false));
+
+  // Header presence alone drives hasThumbnail: an export with no virtual
+  // parts has an entirely empty column and must still read as "checked".
+  const allEmpty = cadLeveledParser.parse(
+    [['Item', 'Part Number', 'Thumbnail', 'QTY'], ['1', '7-100-A', '', '1']], { source: 'leveled-sheet' });
+  check('an all-empty Thumbnail column still counts as present (checked, none found)',
+    allEmpty.hasThumbnail === true && allEmpty.items.every(i => i.thumbnailMissing === false));
 }
 
 console.log('\n== synthetic: leveled CAD parsing captures Revision column ==');
@@ -1692,6 +1906,55 @@ if (imDiffOldPath && imDiffNewPath) {
   check('every reported change actually differs (old !== new for every field)',
     realDiff.changed.every(c => c.fields.every(f => f.old !== f.new)),
     realDiff.changed.filter(c => c.fields.some(f => f.old === f.new)));
+  console.log('\n== real samples: virtual parts + description check across all pairs ==');
+  {
+    const pairs = [
+      ['726020768', invBomPath, imBomMatPath, ['2-303-64410', '7-305-20233']],
+    ];
+    for (const [label, cadP, imP, expected] of pairs) {
+      if (!cadP || !imP) continue;
+      const c = detect.parseCadFromWorkbook(XLSX.read(fs.readFileSync(cadP), { type: 'buffer' }), XLSX).ok;
+      const m = detect.parseItemMasterFromWorkbook(XLSX.read(fs.readFileSync(imP), { type: 'buffer' }), XLSX);
+      check(label + ': Inventor export carries the Thumbnail column', c.hasThumbnail === true);
+      const v = virtualParts.detectVirtualParts([c], m, indexItemMaster);
+      check(label + ': ' + expected.length + ' confirmed virtual parts (' + expected.join(', ') + ')',
+        v.confirmed.length === expected.length &&
+        expected.every(e => v.confirmed.some(x => x.number === e)),
+        v.confirmed.map(x => x.number + ':' + x.childCount));
+      check(label + ': nothing is merely "suspected" when Thumbnail is available', v.suspected.length === 0);
+      // The virtual parts must actually absorb their orphans in the rollup.
+      const grouped = compareAll([c], m, { virtualAnchorRows: v.anchorRows });
+      const anchored = grouped.imOnlyRoots.filter(r => r.isAnchor);
+      check(label + ': virtual parts act as rollup anchors for their orphaned children',
+        anchored.length === expected.length && anchored.every(a => countDescendants(a) > 0),
+        anchored.map(a => a.item.number + '+' + countDescendants(a)));
+      const ungrouped = compareAll([c], m);
+      check(label + ': without the anchors those children would scatter as separate roots',
+        ungrouped.imOnlyRoots.length > grouped.imOnlyRoots.length,
+        { withAnchors: grouped.imOnlyRoots.length, without: ungrouped.imOnlyRoots.length });
+    }
+  }
+
+  if (invBom22819Path && imBom22819Path) {
+    const c = detect.parseCadFromWorkbook(XLSX.read(fs.readFileSync(invBom22819Path), { type: 'buffer' }), XLSX).ok;
+    const m = detect.parseItemMasterFromWorkbook(XLSX.read(fs.readFileSync(imBom22819Path), { type: 'buffer' }), XLSX);
+    check('PN22819: this export has NO Thumbnail column', c.hasThumbnail === false);
+    const v = virtualParts.detectVirtualParts([c], m, indexItemMaster);
+    check('PN22819: the >=3-orphan-child fallback reports nothing here (its 2-child hose/cable rows are not virtual)',
+      v.applicable === true && v.confirmed.length === 0 && v.suspected.length === 0,
+      { confirmed: v.confirmed.length, suspected: v.suspected.length });
+    const td = titleDescCompare.compareTitleDescription([c], m);
+    check('PN22819: 31 description mismatches on this site\'s own manufactured parts',
+      td.applicable === true && td.mismatches.length === 31, td.mismatches.length);
+    check('PN22819: a real dimension error is caught (7-856-20360, "X 3 THK." vs "X 4 THK.")',
+      td.mismatches.some(x => x.number === '7-856-20360'), td.mismatches.map(x => x.number).slice(0, 8));
+    check('PN22819: spacing-only differences are not reported (7-056-23267 TANK - 300LTRS)',
+      !td.mismatches.some(x => x.number === '7-056-23267'));
+    check('PN22819: no purchased or non-7 part appears in the description mismatches',
+      td.mismatches.every(x => /^7-/.test(x.number) && !/^\d-999-/.test(x.number)),
+      td.mismatches.map(x => x.number));
+  }
+
 } else if (imDiffOldPath || imDiffNewPath) {
   console.log('\n(the Item Master diff regression needs both the older and newer Item Master paths)');
 }

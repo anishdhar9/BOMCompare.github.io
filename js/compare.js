@@ -538,7 +538,9 @@
    * ------------------------------------------------------------------ */
 
   // cadSources: one or two parsed CAD results (e.g. Vault PDF + Inventor xlsx)
-  function compareAll(cadSources, im) {
+  // opts (optional): { virtualAnchorRows: Map<PN, imRow> } from
+  // js/virtual-parts.js — see the imOnly grouping below.
+  function compareAll(cadSources, im, opts) {
     const imIndex = indexItemMaster(im);
     const roles = pickRoles(cadSources);
     const structure = roles.structure;
@@ -628,7 +630,11 @@
       Object.defineProperty(entry, '__srcRow', { value: row, enumerable: false });
       imOnly.push(entry);
     }
-    const imOnlyRoots = groupImOnly(imOnly, imIndex.parentOf);
+    // Virtual parts (js/virtual-parts.js, computed by the caller since it is
+    // a separate module) act as grouping anchors: they ARE in the CAD BOM, so
+    // they are not Item-Master-only rows themselves, but their whole child BOM
+    // is — without this those children scatter as one root each.
+    const imOnlyRoots = groupImOnly(imOnly, imIndex.parentOf, opts && opts.virtualAnchorRows);
 
     // 4) reference components: in the full CAD structure but not in the
     // intended-BOM export — the direct review list for "was this meant to be
