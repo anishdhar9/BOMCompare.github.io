@@ -685,16 +685,21 @@ console.log('\n== synthetic: Item Master QC checks ==');
 
 console.log('\n== synthetic: Title/Description completeness (c5) + Material completeness (c6) ==');
 {
+  // Part numbers are 7-* here because only this site's own "7-" parts are
+  // checked; 1-/2-/3-/5- numbers are procured from other company locations
+  // and are deliberately excluded (see MANUFACTURED_PART_RE).
   const aoa = [
     ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Material'],
-    ['MACH-01', '-', 'Machine', 'desc', ''],
+    ['7-000-MACH-01', '-', 'Machine', 'desc', ''],
     ['7-999-PURCH-1', '1', 'Purchased part 1', '', 'AISI 304'],       // purchased, desc blank -> leniency, no flag
     ['7-999-PURCH-2', '2', '', '', 'AISI 304'],                       // purchased, both blank -> flagged
-    ['MFG-PART-1', '3', 'Manufactured part 1', '', 'AISI 304'],       // non-purchased, desc blank -> flagged
-    ['MFG-PART-2', '4', '', 'Manufactured part 2 desc', 'AISI 304'],  // non-purchased, title blank -> flagged
-    ['ASSY-1', '5', 'Assembly 1', 'desc', ''],                        // has a child below -> assembly, material excluded
-    ['ASSY-1-CHILD', '5.1', 'Assy child', 'desc', ''],                // leaf, material blank -> flagged
-    ['LEAF-2', '6', 'Leaf 2', 'desc', 'AISI 316L'],                   // leaf, material present -> not flagged
+    ['7-100-MFG-1', '3', 'Manufactured part 1', '', 'AISI 304'],      // non-purchased, desc blank -> flagged
+    ['7-100-MFG-2', '4', '', 'Manufactured part 2 desc', 'AISI 304'], // non-purchased, title blank -> flagged
+    ['7-200-ASSY-1', '5', 'Assembly 1', 'desc', ''],                  // has a child below -> assembly, material excluded
+    ['7-200-ASSY-CHILD', '5.1', 'Assy child', 'desc', ''],            // leaf, material blank -> flagged
+    ['7-300-LEAF-2', '6', 'Leaf 2', 'desc', 'AISI 316L'],             // leaf, material present -> not flagged
+    ['2-400-PROCURED', '7', '', '', ''],                              // non-7 prefix -> excluded from BOTH c5 and c6
+    ['7-909-00001', '8', 'END OF LINE', '', ''],                      // EOL sentinel -> excluded from c6
   ];
   const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
     utils: { sheet_to_json: () => aoa },
@@ -703,22 +708,33 @@ console.log('\n== synthetic: Title/Description completeness (c5) + Material comp
   const qc = imQc.runChecks(im);
 
   check('c5 flags exactly 3 rows', qc.c5.fail.length === 3, qc.c5.fail.map(f => f.number));
+  // The END OF LINE row is just an ERP marker saying "this BOM is complete",
+  // not a part, so every part-level check skips it (c3, c4, c5, c6, c7, c9).
+  // Only Check 2, whose whole job is to validate that marker, looks at it.
+  check('c5: END OF LINE marker row excluded despite a blank Description',
+    !qc.c5.fail.some(f => f.number === '7-909-00001'), qc.c5.fail.map(f => f.number));
   check('c5: purchased part with one blank field is NOT flagged (leniency)',
     !qc.c5.fail.some(f => f.number === '7-999-PURCH-1'));
   check('c5: purchased part with both blank IS flagged as both-missing',
     qc.c5.fail.some(f => f.number === '7-999-PURCH-2' && f.kind === 'both-missing'));
   check('c5: non-purchased part missing description flagged correctly',
-    qc.c5.fail.some(f => f.number === 'MFG-PART-1' && f.kind === 'description-missing'));
+    qc.c5.fail.some(f => f.number === '7-100-MFG-1' && f.kind === 'description-missing'));
   check('c5: non-purchased part missing title flagged correctly',
-    qc.c5.fail.some(f => f.number === 'MFG-PART-2' && f.kind === 'title-missing'));
+    qc.c5.fail.some(f => f.number === '7-100-MFG-2' && f.kind === 'title-missing'));
+  check('c5: non-7 procured part is excluded even with both fields blank',
+    !qc.c5.fail.some(f => f.number === '2-400-PROCURED'));
 
   check('c6 flags exactly 1 row', qc.c6.applicable === true && qc.c6.fail.length === 1, qc.c6.fail);
   check('c6: assembly with children is excluded despite blank material',
-    !qc.c6.fail.some(f => f.number === 'ASSY-1'));
+    !qc.c6.fail.some(f => f.number === '7-200-ASSY-1'));
   check('c6: leaf part with blank material IS flagged',
-    qc.c6.fail.some(f => f.number === 'ASSY-1-CHILD'));
+    qc.c6.fail.some(f => f.number === '7-200-ASSY-CHILD'));
   check('c6: root row excluded (always counts as assembly)',
-    !qc.c6.fail.some(f => f.number === 'MACH-01'));
+    !qc.c6.fail.some(f => f.number === '7-000-MACH-01'));
+  check('c6: non-7 procured part excluded despite blank material',
+    !qc.c6.fail.some(f => f.number === '2-400-PROCURED'));
+  check('c6: END OF LINE sentinel row excluded despite blank material',
+    !qc.c6.fail.some(f => f.number === '7-909-00001'));
 
   // no Material column at all -> not-applicable, not mass-fail
   const noMatAoa = aoa.map(r => r.slice(0, 4)); // drop the Material column
@@ -958,6 +974,7 @@ console.log('\n== synthetic: findings registry (one primary finding per part) ==
 console.log('\n== synthetic: "In Item Master only" parent rollup (groupImOnly) ==');
 {
   // Reuses the same shape as the missing-item tree so renderTree/countDescendants work.
+  // groupImOnly now takes a positional parent index (Map<row, parentRow>).
   const rows = [
     { number: 'ASSY-1', title: 'Assembly', path: ['1'], sourceRow: 2 },
     { number: 'CHILD-A', title: 'Child A', path: ['1', '1'], sourceRow: 3 },
@@ -965,13 +982,15 @@ console.log('\n== synthetic: "In Item Master only" parent rollup (groupImOnly) =
     { number: 'GRAND-C', title: 'Grandchild', path: ['1', '2', '1'], sourceRow: 5 },
     { number: 'LONE-1', title: 'Unrelated', path: ['2'], sourceRow: 6 },
   ];
-  const byPath = new Map(rows.map(r => [r.path.join('.'), r]));
-  const roots = groupImOnly(rows, byPath);
+  const parentOf = new Map([
+    [rows[1], rows[0]], [rows[2], rows[0]], [rows[3], rows[2]],
+  ]);
+  const roots = groupImOnly(rows, parentOf);
   check('a whole flagged subassembly collapses to one root', roots.length === 2, roots.map(r => r.item.number));
   check('every row is still present in the tree (nothing dropped)',
     roots.reduce((n, r) => n + 1 + countDescendants(r), 0) === rows.length,
     roots.map(r => r.item.number + ':' + countDescendants(r)));
-  check('nesting follows the Row Order hierarchy, not just the direct parent',
+  check('nesting follows the hierarchy, not just the direct parent',
     countDescendants(roots[0]) === 3 && roots[1].item.number === 'LONE-1', roots);
 
   // No Row Order column -> nothing to group by; must degrade, not crash.
@@ -979,10 +998,37 @@ console.log('\n== synthetic: "In Item Master only" parent rollup (groupImOnly) =
   check('degrades to one root per part when the export has no Row Order', flat.length === rows.length, flat.length);
 
   // A parent that is NOT itself flagged must not swallow its children.
+  const presentParent = { number: 'PRESENT-PARENT', title: 'in CAD', path: ['9'] };
   const orphanRows = [{ number: 'CHILD-X', title: 'X', path: ['9', '1'], sourceRow: 7 }];
-  const orphanByPath = new Map([['9', { number: 'PRESENT-PARENT', title: 'in CAD' }], ['9.1', orphanRows[0]]]);
   check('a child whose parent is not flagged stays top-level',
-    groupImOnly(orphanRows, orphanByPath).length === 1);
+    groupImOnly(orphanRows, new Map([[orphanRows[0], presentParent]])).length === 1);
+
+  // Ordering must not matter: a child listed BEFORE its flagged ancestor used
+  // to break the ancestor walk and silently emit the child as its own root.
+  const late = [
+    { number: 'CHILD-LATE', title: 'Child', path: ['3', '1'], sourceRow: 20 },
+    { number: 'ASSY-LATE', title: 'Assembly', path: ['3'], sourceRow: 21 },
+  ];
+  const lateRoots = groupImOnly(late, new Map([[late[0], late[1]]]));
+  check('child appearing before its flagged ancestor still groups under it',
+    lateRoots.length === 1 && lateRoots[0].item.number === 'ASSY-LATE' && countDescendants(lateRoots[0]) === 1,
+    lateRoots.map(r => r.item.number + ':' + countDescendants(r)));
+
+  // Virtual-part anchors: a parent that IS in the CAD BOM (so not itself
+  // Item-Master-only) can still absorb its orphaned children when passed as an
+  // anchor — this is what stops a virtual subassembly's children scattering.
+  const vChildren = [
+    { number: 'V-CHILD-1', title: 'c1', path: ['4', '1'], sourceRow: 30 },
+    { number: 'V-CHILD-2', title: 'c2', path: ['4', '2'], sourceRow: 31 },
+  ];
+  const vParent = { number: 'V-ASSY', title: 'Virtual assembly', path: ['4'], sourceRow: 29 };
+  const vRoots = groupImOnly(vChildren, new Map([[vChildren[0], vParent], [vChildren[1], vParent]]),
+    new Map([['V-ASSY', vParent]]));
+  check('virtual-part anchor absorbs its orphaned children into one root',
+    vRoots.length === 1 && vRoots[0].item.number === 'V-ASSY' && countDescendants(vRoots[0]) === 2,
+    vRoots.map(r => r.item.number + ':' + countDescendants(r)));
+  check('an anchor that absorbs nothing never appears as an empty finding',
+    groupImOnly([], new Map(), new Map([['V-ASSY', vParent]])).length === 0);
 }
 
 console.log('\n== synthetic: folder auto-load file classification ==');
@@ -1152,12 +1198,14 @@ console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-o
 {
   const imAoa = [
     ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Material'],
-    ['MACH-01', '-', 'Machine', 'desc', ''],
-    ['ASSY-1', '1', 'An assembly', 'desc', ''],           // assembly (has children below) -> material not expected
-    ['PART-A', '1.1', 'Matches (naming variant)', 'desc', '1.4301'],
-    ['PART-B', '1.2', 'Genuine mismatch', 'desc', 'AISI 304'],
+    ['7-000-MACH-01', '-', 'Machine', 'desc', ''],
+    ['7-200-ASSY-1', '1', 'An assembly', 'desc', ''],     // assembly (has children below) -> material not expected
+    ['7-100-PART-A', '1.1', 'Matches (naming variant)', 'desc', '1.4301'],
+    ['7-100-PART-B', '1.2', 'Genuine mismatch', 'desc', 'AISI 304'],
     ['7-999-00001', '1.3', 'Purchased, missing material', 'desc', ''],
     ['7-999-00002', '1.4', 'Purchased, mismatch vs CAD', 'desc', 'AISI 304'],
+    ['2-100-PROCURED', '1.5', 'Procured elsewhere, mismatch', 'desc', 'AISI 304'],
+    ['7-909-00001', '1.6', 'END OF LINE', '', '.'],       // sentinel, placeholder material
   ];
   const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
     utils: { sheet_to_json: () => imAoa },
@@ -1165,9 +1213,11 @@ console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-o
 
   const cadSource = {
     kind: 'cad', source: 'flat-xlsx', hasQty: false, hasMaterial: true, items: [
-      { number: 'PART-A', title: 'Part A', material: 'AISI 304', isAssembly: false },
-      { number: 'PART-B', title: 'Part B', material: 'AISI 304L', isAssembly: false }, // genuine grade difference
+      { number: '7-100-PART-A', title: 'Part A', material: 'AISI 304', isAssembly: false },
+      { number: '7-100-PART-B', title: 'Part B', material: 'AISI 304L', isAssembly: false }, // genuine grade difference
       { number: '7-999-00002', title: 'Purchased', material: 'AISI 316', isAssembly: false },
+      { number: '2-100-PROCURED', title: 'Procured', material: 'AISI 316', isAssembly: false },
+      { number: '7-909-00001', title: 'END OF LINE', material: 'AISI 316 L', isAssembly: false },
     ],
   };
 
@@ -1178,7 +1228,11 @@ console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-o
   const res = materialCompare.compareMaterial([cadSource], im);
   check('applicable with a flat-xlsx CAD source', res.applicable === true);
   check('PART-A naming variant not flagged, only PART-B (genuine mismatch)',
-    res.mismatches.length === 1 && res.mismatches[0].number === 'PART-B', res.mismatches.map(m => m.number));
+    res.mismatches.length === 1 && res.mismatches[0].number === '7-100-PART-B', res.mismatches.map(m => m.number));
+  check('non-7 procured part excluded from material mismatches',
+    !res.mismatches.some(m => m.number === '2-100-PROCURED'), res.mismatches.map(m => m.number));
+  check('END OF LINE sentinel excluded from material mismatches',
+    !res.mismatches.some(m => m.number === '7-909-00001'), res.mismatches.map(m => m.number));
   check('purchased parts excluded from the mismatches list', !res.mismatches.some(m => /^\d-999-/.test(m.number)));
 
   check('bought-out panel lists both purchased parts', res.boughtOut.length === 2, res.boughtOut.map(b => b.number));
@@ -1228,8 +1282,11 @@ if (cadPath && imPath) {
     hsgQc.c3.fail.map(f => f.number));
   check('HSG c4 entity icon: not applicable (column absent)', hsgQc.c4.applicable === false, hsgQc.c4);
   check('HSG c7 revision consistency: not applicable (no Revision column)', hsgQc.c7.applicable === false, hsgQc.c7);
-  check('HSG c5 title/desc: 49 flagged (all description-missing on non-purchased parts)',
-    hsgQc.c5.fail.length === 49 && hsgQc.c5.fail.every(f => f.kind === 'description-missing'), hsgQc.c5.fail.length);
+  // 49 -> 36: the 13 non-"7-" rows (six 2-*, seven 5-*) are procured from
+  // other company locations and can't be fixed here, so they're excluded.
+  check('HSG c5 title/desc: 36 flagged, all "7-" parts, all description-missing',
+    hsgQc.c5.fail.length === 36 && hsgQc.c5.fail.every(f => f.kind === 'description-missing') &&
+    hsgQc.c5.fail.every(f => /^7-/.test(String(f.number).trim())), hsgQc.c5.fail.length);
   check('HSG c6 material: 6 non-assembly, non-purchased parts flagged (purchased parts excluded)',
     hsgQc.c6.applicable === true && hsgQc.c6.fail.length === 6 && hsgQc.c6.fail.every(f => !/^\d-999-/.test(f.number)),
     hsgQc.c6.fail.length);
@@ -1258,8 +1315,12 @@ if (cadPath && imPath) {
   const cad0 = cadRes0.ok;
   const matRes = materialCompare.compareMaterial([cad0], im);
   check('material check applicable with flat-xlsx CAD source', matRes.applicable === true, matRes);
-  check('7 genuine (deduplicated, normalized) material mismatches on manufactured parts',
-    matRes.mismatches.length === 7 && new Set(matRes.mismatches.map(m => m.number)).size === 7, matRes.mismatches.map(m => m.number));
+  // 7 -> 6: the END OF LINE marker row (7-909-00001, material ".") is no
+  // longer compared — it is an ERP completeness marker, not a part.
+  check('6 genuine (deduplicated, normalized) material mismatches on manufactured parts',
+    matRes.mismatches.length === 6 && new Set(matRes.mismatches.map(m => m.number)).size === 6, matRes.mismatches.map(m => m.number));
+  check('END OF LINE marker row is not a material mismatch',
+    !matRes.mismatches.some(m => m.number === '7-909-00001'), matRes.mismatches.map(m => m.number));
   check('none of the mismatches are naming-convention noise (spot check: no bare 1.4301-vs-AISI304-style pair)',
     !matRes.mismatches.some(m => m.number === '7-240-21292'), matRes.mismatches.map(m => m.number));
   check('304-vs-304L genuine difference still flagged', matRes.mismatches.some(m => m.number === '7-238-27981'), matRes.mismatches.map(m => m.number));
@@ -1320,8 +1381,10 @@ if (cadPath && imPath) {
     revisionResult: revisionCompare.compareRevision([cad], im),
   });
   const overlaps = hsgReg.parts.filter(p => p.issues.length > 1);
-  check('exactly 3 real parts are flagged by more than one check',
-    overlaps.length === 3, overlaps.map(p => p.number + ':' + p.issues.map(i => i.key).join('+')));
+  // 3 -> 2: the third overlap was a 5-* part flagged by Check 5, which now
+  // skips non-"7-" procured parts.
+  check('exactly 2 real parts are flagged by more than one check',
+    overlaps.length === 2, overlaps.map(p => p.number + ':' + p.issues.map(i => i.key).join('+')));
   check('every one of them is owned by "In Item Master only", the more serious check',
     overlaps.every(p => p.primary.key === 'imOnly'), overlaps.map(p => p.primary.key));
   check('2-999-06110 (imOnly + c3): Check-3 row demoted, imOnly row kept primary',
@@ -1366,9 +1429,13 @@ if (cadPath && imPath) {
       ltb732 && ltb732.primary.key);
     check('LTB-4 vs 732020066: its Check-3 row renders as a cross-reference',
       reg732.isSecondary('c3', '7-238-23791') === true && reg732.isSecondary('imOnly', '7-238-23791') === false);
-    check('vs 732020066: 1033 flat "In Item Master only" rows collapse to 11 roots',
-      res732.imOnly.length === 1033 && res732.imOnlyRoots.length === 11,
+    // 1033 -> 1032 flat (the Item Master's own root row is no longer a
+    // finding) and 11 -> 10 roots for the same reason.
+    check('vs 732020066: 1032 flat "In Item Master only" rows collapse to 10 roots',
+      res732.imOnly.length === 1032 && res732.imOnlyRoots.length === 10,
       { flat: res732.imOnly.length, roots: res732.imOnlyRoots.length });
+    check('vs 732020066: the Item Master root row is not reported as a finding',
+      !res732.imOnly.some(r => Array.isArray(r.path) && r.path.length === 0));
     check('vs 732020066: the rollup loses nothing (tree still holds all 1033)',
       res732.imOnlyRoots.reduce((n, r) => n + 1 + countDescendants(r), 0) === res732.imOnly.length);
   }
@@ -1552,8 +1619,9 @@ if (invBomPath && imBomMatPath) {
 
   const matRes726 = materialCompare.compareMaterial([invCad], imBomMat);
   check('material check applicable via the Inventor BOM export (not flat-xlsx)', matRes726.applicable === true, matRes726);
-  check('726020768: 6 genuine material mismatches',
-    matRes726.mismatches.length === 6 && new Set(matRes726.mismatches.map(m => m.number)).size === 6,
+  // 6 -> 5: the END OF LINE marker row is excluded (see above).
+  check('726020768: 5 genuine material mismatches',
+    matRes726.mismatches.length === 5 && new Set(matRes726.mismatches.map(m => m.number)).size === 5,
     matRes726.mismatches.map(m => m.number));
   check('726020768: CAD-side modeling gap caught (Generic.1 placeholder material)',
     matRes726.mismatches.some(m => m.cadMaterial === 'Generic.1'), matRes726.mismatches.map(m => m.cadMaterial));
@@ -1589,8 +1657,13 @@ if (invBom22819Path && imBom22819Path) {
   check('PN22819 Item Master parsed', !!im22819 && im22819.rows.length > 0, im22819 && im22819.rows.length);
 
   const res22819 = compareAll([invCad], im22819);
-  check('380 flat quantity mismatches (unchanged — the flat list is untouched by cascade detection)',
-    res22819.qtyMismatches.length === 380, res22819.qtyMismatches.length);
+  // 380 -> 329. This export reuses a Row Order position for adjacent
+  // siblings (40 such positions), which the old path-string ancestor lookup
+  // resolved to the wrong branch, inflating those parts' rolled-up Item
+  // Master quantities. Verified: all 51 rows that dropped out now have an
+  // Item Master total exactly equal to CAD, and no part moved the other way.
+  check('329 flat quantity mismatches after the ancestor-resolution fix',
+    res22819.qtyMismatches.length === 329, res22819.qtyMismatches.length);
   check('exactly one quantity cascade found', res22819.qtyCascades.applicable === true &&
     res22819.qtyCascades.roots.length === 1, res22819.qtyCascades.roots.map(r => r.item.number));
   const cascadeRoot = res22819.qtyCascades.roots[0];

@@ -181,15 +181,17 @@
       };
     }
 
-    var assemblies = imQc.buildAssemblyPathSet(im.rows);
     var pathIndex = imQc.buildPathIndex(im.rows);
+    var assemblies = imQc.buildAssemblySet(im.rows, pathIndex);
     var mismatches = [];
     var seenPn = new Set(); // same part can occur at several BOM positions; report it once
     for (var i = 0; i < im.rows.length; i++) {
       var row = im.rows[i];
       var pnKey = String(row.number).trim().toUpperCase();
       if (imQc.PURCHASED_PART_RE.test(row.number)) continue; // handled by the Bought-Out Parts panel instead
-      if (!Array.isArray(row.path) || assemblies.has(row.path.join('.'))) continue; // assemblies don't carry material
+      if (!imQc.isOwnPart(row.number)) continue; // procured at another site — not actionable here
+      if (imQc.isEndOfLine(row)) continue; // sentinel marker row, carries a placeholder material
+      if (!Array.isArray(row.path) || assemblies.has(row)) continue; // assemblies don't carry material
       if (imQc.blank(row.material)) continue; // Check 6 already covers "IM material missing"
       if (seenPn.has(pnKey)) continue;
       var cadMat = cad.byPn.get(pnKey);
