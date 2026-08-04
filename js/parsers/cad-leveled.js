@@ -185,6 +185,11 @@
       }
       rawIndents.push(indent);
 
+      // 1-based PDF page this row came from (pdf-extract.js's pageOf), null
+      // for every non-PDF source — lets the UI point back at the exact page
+      // to verify a flagged part on, instead of just a reconstructed row #.
+      const page = opts.pageOf && opts.pageOf[r] !== undefined && opts.pageOf[r] !== null ? opts.pageOf[r] : null;
+
       const bomStructure = cStructure >= 0 ? cellText(row[cStructure]) : '';
       items.push({
         seq: items.length,
@@ -204,6 +209,7 @@
         // without the column never looks like every row is virtual.
         thumbnailMissing: cThumbnail >= 0 && /^\(NULL\)$/i.test(cellText(row[cThumbnail])),
         sourceRow: r + 1,
+        page: page,
       });
     }
     if (!items.length) return null;

@@ -169,10 +169,11 @@ tr.row-demoted:hover { opacity: 1; }
   display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11px;
   background: var(--chip-bg); color: var(--muted); margin-left: 6px; white-space: nowrap;
 }
-.attention-toggle {
+.attention-toggle, .trace-toggle {
   background: none; border: none; color: var(--accent); font: inherit; font-size: 12.5px;
   cursor: pointer; padding: 6px 2px; text-decoration: underline;
 }
+.trace-toggle { padding: 0 2px; }
 .section-flash { animation: sectionFlash 1.1s ease; }
 @keyframes sectionFlash { 0%, 40% { box-shadow: 0 0 0 2px var(--accent); } 100% { box-shadow: none; } }
 .source-line { margin: 0 0 4px; font-size: 12.5px; color: var(--muted); }
@@ -184,6 +185,8 @@ tr.row-demoted:hover { opacity: 1; }
 .im-qc-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 4px; }
 .im-qc-head h2 { margin: 0 0 4px; font-size: 17px; }
 .im-qc-head .dz-hint { margin: 0; max-width: 640px; }
+.im-qc-head-toggle { cursor: pointer; user-select: none; }
+.im-qc-head-toggle:hover { background: var(--muted-row); }
 .optional-tag {
   font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
   color: var(--muted); background: var(--chip-bg); border-radius: 4px; padding: 2px 6px; vertical-align: middle;
@@ -290,6 +293,7 @@ tr.hidden-row { display: none; }
 .qty-breakdown { font-size: 12.5px; color: var(--muted); }
 .qty-breakdown table { border-collapse: collapse; margin: 4px 0 6px; }
 .qty-breakdown td, .qty-breakdown th { border: 1px solid var(--border); padding: 2px 8px; font-size: 12px; }
+.trace-none { padding: 2px 0 8px; font-style: italic; }
 .empty-state { text-align: center; color: var(--muted); padding: 30px 10px; }
 
 /* ---- misc ---- */

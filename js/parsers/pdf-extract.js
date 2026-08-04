@@ -17,6 +17,12 @@
  *  - Hierarchy is encoded by the filename's indentation (~10–11pt per level).
  *  - "Attachments" blocks (label + .stp file rows, possibly wrapped) must be
  *    swallowed. Records never straddle a page break.
+ *  - Every page (not just page 1) carries a running footer (page-number /
+ *    pagination text) below the last real row. Left unfiltered, it gets
+ *    glued onto whichever row's cell sits closest to it — most visibly (and
+ *    most harmfully) the Part Number column, which corrupts the exact string
+ *    later matched against the Item Master. See the footer-floor + Part
+ *    Number concatenation guard in extractGrid below.
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
@@ -68,12 +74,35 @@
     return null;
   }
 
+  // Typical vertical spacing between consecutive row anchors on a page,
+  // pooled (median) across every page with enough rows to measure it. Used to
+  // tell a genuine table row from footer/pagination text sitting below the
+  // last real row on a page — see extractGrid's footer-floor use below.
+  // Returns null when no page has at least 2 anchors (e.g. a 1-row-per-page
+  // document), which callers must treat as "can't estimate, don't filter".
+  function computeRowPitch(pageAnchorsList) {
+    var deltas = [];
+    for (var i = 0; i < pageAnchorsList.length; i++) {
+      var ys = pageAnchorsList[i].map(function (a) { return a.y; }).sort(function (a, b) { return b - a; });
+      for (var j = 1; j < ys.length; j++) {
+        var d = ys[j - 1] - ys[j];
+        if (d > 0) deltas.push(d);
+      }
+    }
+    if (!deltas.length) return null;
+    deltas.sort(function (a, b) { return a - b; });
+    return deltas[Math.floor(deltas.length / 2)];
+  }
+
   /**
    * @param data ArrayBuffer of the PDF
    * @param opts { pdfjsLib, onProgress(page, total) }
-   * @returns { rows, indents, pages, warnings } — rows[0] is the header row;
-   *          indents[i] is the filename x-offset of rows[i] (levels derive
-   *          from it in cad-leveled.js), null for the header row.
+   * @returns { rows, indents, pageOf, pages, warnings } — rows[0] is the
+   *          header row; indents[i] is the filename x-offset of rows[i]
+   *          (levels derive from it in cad-leveled.js); pageOf[i] is the
+   *          1-based PDF page rows[i] came from. Both are null for the
+   *          header row. `pages` is the document's total page count (not
+   *          per-row — see pageOf for that).
    */
   async function extractGrid(data, opts) {
     opts = opts || {};
@@ -100,7 +129,7 @@
     var header = findHeader(pages[0]);
     if (!header) {
       warnings.push('No Vault "Uses" table header (Name / Revision / State / Title / Description) was found on page 1 of the PDF.');
-      return { rows: [], indents: [], pages: doc.numPages, warnings: warnings };
+      return { rows: [], indents: [], pageOf: [], pages: doc.numPages, warnings: warnings };
     }
     if (header.cols['Part Number'] === undefined) {
       warnings.push('No "Part Number" column found in the PDF — part numbers will be derived from file names, which is unreliable for renamed items.');
@@ -124,9 +153,11 @@
       if (c.name === 'Part Number') numberCol = idx;
     });
 
-    var rows = [cols.map(function (c) { return c.name; })];
-    var indents = [null];
-
+    // Pass 1: classify every page's text into row anchors (a filename or
+    // attachment fragment in the File column) and "rest" (everything else,
+    // destined for some row's cells) — independent per page.
+    var pageAnchors = [];
+    var pageRest = [];
     for (var pn = 0; pn < pages.length; pn++) {
       var anchors = [];
       var rest = [];
@@ -145,17 +176,43 @@
           rest.push({ str: it.str, x: it.x, y: it.y, col: ci });
         }
       }
-      // every non-anchor item belongs to the vertically nearest anchor
-      for (var r = 0; r < rest.length; r++) {
-        var frag = rest[r];
-        var best = null;
-        for (var a = 0; a < anchors.length; a++) {
-          if (best === null || Math.abs(anchors[a].y - frag.y) < Math.abs(anchors[best].y - frag.y)) best = a;
-        }
-        if (best !== null) anchors[best].cells.push(frag);
+      pageAnchors.push(anchors);
+      pageRest.push(rest);
+    }
+
+    // A running footer (e.g. "N / 64" page-number text) sits below every real
+    // row on its page. Anything more than FOOTER_FLOOR_ROWS row-heights below
+    // a page's lowest anchor is footer/pagination text, not table content —
+    // dropping it here keeps it out of the "nearest anchor" attachment below,
+    // which would otherwise glue it onto whichever real row happens to sit
+    // closest to the bottom margin (see the header comment for why a footer
+    // fragment landing in the Part Number column is the corruption that
+    // breaks the Item Master match).
+    var FOOTER_FLOOR_ROWS = 3;
+    var rowPitch = computeRowPitch(pageAnchors);
+
+    var rows = [cols.map(function (c) { return c.name; })];
+    var indents = [null];
+    var pageOf = [null];
+
+    for (var pn2 = 0; pn2 < pages.length; pn2++) {
+      var pageAnchorList = pageAnchors[pn2];
+      var pageRestList = pageRest[pn2];
+      if (rowPitch && pageAnchorList.length) {
+        var floorY = Math.min.apply(null, pageAnchorList.map(function (a) { return a.y; })) - FOOTER_FLOOR_ROWS * rowPitch;
+        pageRestList = pageRestList.filter(function (frag) { return frag.y >= floorY; });
       }
-      for (var a2 = 0; a2 < anchors.length; a2++) {
-        var anc = anchors[a2];
+      // every non-anchor item belongs to the vertically nearest anchor
+      for (var r = 0; r < pageRestList.length; r++) {
+        var frag = pageRestList[r];
+        var best = null;
+        for (var a = 0; a < pageAnchorList.length; a++) {
+          if (best === null || Math.abs(pageAnchorList[a].y - frag.y) < Math.abs(pageAnchorList[best].y - frag.y)) best = a;
+        }
+        if (best !== null) pageAnchorList[best].cells.push(frag);
+      }
+      for (var a2 = 0; a2 < pageAnchorList.length; a2++) {
+        var anc = pageAnchorList[a2];
         if (anc.sink) continue;
         var rowArr = new Array(cols.length).fill('');
         rowArr[fileCol] = anc.file;
@@ -166,7 +223,19 @@
           if (cell.col < 0) continue;
           var prev = rowArr[cell.col];
           if (cell.col === numberCol) {
-            rowArr[cell.col] = !prev || /-$/.test(prev) ? prev + cell.str : prev + ' ' + cell.str;
+            // A Part Number only ever legitimately gains a second fragment
+            // when it wraps mid-number ("7-320-" / "20066", joined at the
+            // trailing "-" — see the header comment). Anything else reaching
+            // here (most commonly a footer fragment the pitch floor above
+            // didn't catch) is discarded rather than silently glued on,
+            // since a glued fragment corrupts the exact string compare.js
+            // matches against the Item Master.
+            if (!prev || /-$/.test(prev)) {
+              rowArr[cell.col] = prev + cell.str;
+            } else {
+              warnings.push('Page ' + (pn2 + 1) + ': discarded unexpected text "' + cell.str +
+                '" next to Part Number "' + prev + '" (' + anc.file + ') — likely a footer/pagination fragment.');
+            }
           } else {
             rowArr[cell.col] = prev ? prev + ' ' + cell.str : cell.str;
           }
@@ -175,16 +244,18 @@
           // no part-number fragments (hidden column / detached row): derive
           // from the filename — "7-999-00044I00.ipt" -> "7-999-00044"
           rowArr[numberCol] = anc.file.replace(/\.(iam|ipt)$/i, '').replace(/I\d+$/i, '');
+          warnings.push('Page ' + (pn2 + 1) + ': "' + anc.file + '" had no Part Number fragment — number derived from the filename instead.');
         }
         rows.push(rowArr);
         indents.push(anc.x);
+        pageOf.push(pn2 + 1);
       }
     }
 
     if (rows.length === 1) {
       warnings.push('A Vault table header was found but no component rows below it.');
     }
-    return { rows: rows, indents: indents, pages: doc.numPages, warnings: warnings };
+    return { rows: rows, indents: indents, pageOf: pageOf, pages: doc.numPages, warnings: warnings };
   }
 
   return { pdfExtract: { extractGrid: extractGrid, findHeader: findHeader } };

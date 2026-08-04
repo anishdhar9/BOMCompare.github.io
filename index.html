@@ -52,6 +52,10 @@
       </div>
     </section>
 
+    <section class="actions">
+      <button type="button" class="btn btn-primary btn-big" id="btn-compare" disabled>Compare BOMs</button>
+    </section>
+
     <section class="dashboard hidden" id="dashboard">
       <div class="dash-head">
         <h2>Overview</h2>
@@ -62,14 +66,14 @@
     </section>
 
     <section class="im-qc hidden" id="attention">
-      <div class="im-qc-head">
+      <div class="im-qc-head im-qc-head-toggle" id="attention-head">
         <div>
           <h2>Parts needing attention</h2>
           <p class="dz-hint">One row per part, worst issue first. A part flagged by several checks is listed once here, and shows every issue found on it. The detail sections below still carry the full per-check breakdown.</p>
         </div>
         <span class="qc-pill na" id="attention-count"></span>
       </div>
-      <div id="attention-body"></div>
+      <div id="attention-body" class="qc-section-body open"></div>
     </section>
 
     <section class="im-qc hidden" id="im-qc">
@@ -121,10 +125,6 @@
         <table class="mapping-preview" id="mapping-preview"></table>
       </div>
       <button type="button" class="btn btn-primary" id="mapping-apply">Apply mapping</button>
-    </section>
-
-    <section class="actions">
-      <button type="button" class="btn btn-primary btn-big" id="btn-compare" disabled>Compare BOMs</button>
     </section>
 
     <section class="notices" id="notices"></section>
