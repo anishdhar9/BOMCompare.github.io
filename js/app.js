@@ -27,6 +27,8 @@
     virtualResult: null,   // js/virtual-parts.js detectVirtualParts() result
     findings: null,       // js/findings.js buildRegistry() — cross-check registry
     showGrouped: false,   // "parts needing attention": reveal grouped children
+    sectionOpen: new Map(),  // qc-section id -> user override, survives re-renders
+    traceOpen: new Map(),    // part number -> provenance-detail toggle open?, survives re-renders
   };
 
   // Base name suffix from the Item Master's SPN/PN project key, e.g.
@@ -346,12 +348,13 @@
       throw new Error((grid.warnings[0] || 'No table found in the PDF.') +
         '\nExpected the Vault web client\'s multi-level BOM ("Uses") PDF report.');
     }
-    const parsed = BC.cadLeveledParser.parse(grid.rows, { indents: grid.indents, source: 'pdf' });
+    const parsed = BC.cadLeveledParser.parse(grid.rows, { indents: grid.indents, pageOf: grid.pageOf, source: 'pdf' });
     if (!parsed) {
       renderCadSources('', '');
       showMapping({
         aoa: grid.rows,
         indents: grid.indents,
+        pageOf: grid.pageOf,
         source: 'pdf',
         analysis: BC.cadLeveledParser.analyze(grid.rows),
         fileName: file.name,
@@ -442,6 +445,7 @@
       mapping: mapping,
       headerRow: ctx.analysis.headerRow,
       indents: ctx.indents,
+      pageOf: ctx.pageOf,
       source: ctx.source,
     });
     if (!parsed || !parsed.items.length) { alert('No rows with a part number found in that column.'); return; }
@@ -590,6 +594,7 @@
 
     const body = document.createElement('div');
     body.className = 'qc-section-body';
+    let contentOpen = false;
     if (!result.applicable) {
       body.innerHTML = '<div class="empty-state">' + result.reason + '</div>';
     } else if (!result.fail.length) {
@@ -611,11 +616,17 @@
         table.appendChild(tr);
       }
       body.appendChild(table);
-      body.classList.add('open');
+      contentOpen = true;
     }
     box.appendChild(body);
 
-    head.addEventListener('click', function () { body.classList.toggle('open'); });
+    // A manual toggle overrides the content-driven default above, and must
+    // survive this box being torn down and rebuilt on every re-render (this
+    // function runs fresh every time — see state.sectionOpen).
+    const id = check.key;
+    const isOpen = state.sectionOpen.has(id) ? state.sectionOpen.get(id) : contentOpen;
+    if (isOpen) body.classList.add('open');
+    head.addEventListener('click', function () { state.sectionOpen.set(id, body.classList.toggle('open')); });
     return box;
   }
 
@@ -913,6 +924,14 @@
     }
   }
 
+  // Collapsible toggle for the whole section, wired once (unlike the
+  // qc-section pattern, #attention-body's own node is never replaced by
+  // renderAttention() — only its innerHTML — so the 'open' class seeded in
+  // index.html survives every re-render with no state bookkeeping needed).
+  $('attention-head').addEventListener('click', function () {
+    $('attention-body').classList.toggle('open');
+  });
+
   // AOA rows for the "Parts needing attention" export sheet — one row per part
   // with every issue found on it, so the same part isn't chased across sheets.
   function attentionSheetRows(reg) {
@@ -1008,7 +1027,10 @@
 
   // `checkKey` (optional) ties the rows back to the findings registry so a part
   // already reported more seriously elsewhere renders muted with a cross-ref.
-  function lldboSectionFor(title, desc, cols, fail, emptyText, checkKey) {
+  // `traceable` (optional): adds a trace toggle to the Part Number cell (cols
+  // must include a 'number' entry) revealing full cross-source provenance —
+  // opt-in per call site, not every list built from this function needs it.
+  function lldboSectionFor(title, desc, cols, fail, emptyText, checkKey, traceable) {
     const box = document.createElement('div');
     box.className = 'qc-section';
     const head = document.createElement('div');
@@ -1026,6 +1048,7 @@
 
     const body = document.createElement('div');
     body.className = 'qc-section-body';
+    let contentOpen = false;
     if (!fail.length) {
       body.innerHTML = '<div class="empty-state">' + emptyText + '</div>';
     } else {
@@ -1036,15 +1059,33 @@
       table.appendChild(htr);
       for (const row of fail) {
         const tr = document.createElement('tr');
-        for (const [key] of cols) addTd(tr, row[key]);
+        for (const col of cols) {
+          if (traceable && col[0] === 'number') {
+            const td = document.createElement('td');
+            td.appendChild(document.createTextNode(row.number + ' '));
+            td.appendChild(traceToggleEl(row.number));
+            tr.appendChild(td);
+          } else {
+            addTd(tr, row[col[0]]);
+          }
+        }
         if (checkKey) decorateSecondary(tr, checkKey, row.number);
         table.appendChild(tr);
+        if (traceable) table.appendChild(traceDetailRow(row.number, cols.length));
       }
+      if (traceable) wireTraceToggles(table);
       body.appendChild(table);
-      body.classList.add('open');
+      contentOpen = true;
     }
     box.appendChild(body);
-    head.addEventListener('click', function () { body.classList.toggle('open'); });
+
+    // See qcSectionFor's comment — same override-survives-rebuild mechanism.
+    // Falls back to the title text when no checkKey is given so unrelated
+    // sections never accidentally share one state.sectionOpen slot.
+    const id = checkKey || title;
+    const isOpen = state.sectionOpen.has(id) ? state.sectionOpen.get(id) : contentOpen;
+    if (isOpen) body.classList.add('open');
+    head.addEventListener('click', function () { state.sectionOpen.set(id, body.classList.toggle('open')); });
     return box;
   }
 
@@ -1197,7 +1238,12 @@
       body.appendChild(table);
     }
     box.appendChild(body);
-    head.addEventListener('click', function () { body.classList.toggle('open'); });
+
+    // Singleton section (called once) — always starts collapsed regardless
+    // of content, per the comment above, unless the user has toggled it.
+    const id = 'boughtOut';
+    if (state.sectionOpen.get(id)) body.classList.add('open');
+    head.addEventListener('click', function () { state.sectionOpen.set(id, body.classList.toggle('open')); });
     return box;
   }
 
@@ -1355,7 +1401,7 @@
           'Purchased "X-999-" parts and parts procured at another site (numbers not starting "7-") are excluded.',
         TITLEDESC_MISMATCH_COLS, res.mismatches,
         '✓ CAD and Item Master descriptions agree for every shared part.',
-        'titleDesc'
+        'titleDesc', true
       ));
     } else {
       const note = document.createElement('div');
@@ -1561,6 +1607,7 @@
     thead.appendChild(htr);
     table.appendChild(thead);
     const tbody = document.createElement('tbody');
+    const colSpan = htr.children.length;
 
     let uid = 0;
     const renderNode = function (node, depth, parentId) {
@@ -1615,6 +1662,8 @@
         x.textContent = extra.text;
         tdNum.appendChild(x);
       }
+      tdNum.appendChild(document.createTextNode(' '));
+      tdNum.appendChild(traceToggleEl(it.number));
       tr.appendChild(tdNum);
 
       if (cols.title) addTd(tr, it.title);
@@ -1626,6 +1675,7 @@
       if (cols.row) addTd(tr, String(it.sourceRow || ''));
 
       tbody.appendChild(tr);
+      tbody.appendChild(traceDetailRow(it.number, colSpan));
       for (const c of node.children) renderNode(c, depth + 1, id);
     };
 
@@ -1634,6 +1684,7 @@
     pane.appendChild(table);
 
     wireExpanders(tbody);
+    wireTraceToggles(tbody);
   }
 
   function renderMissingTab() {
@@ -1714,6 +1765,81 @@
   function nodeTreeMatches(node) {
     if (matchesFilter([node.item.number, node.item.title, node.item.description])) return true;
     return node.children.some(nodeTreeMatches);
+  }
+
+  /* ----- cross-source traceability -----
+   * Lets a flagged row in any results list answer "which uploaded file(s)
+   * was this part found in or absent from, and what row/page do I check by
+   * hand" without the user reopening the CAD source(s) or Item Master
+   * themselves. Built from compareAll()'s cadOccurrences/imOccurrences
+   * (js/compare.js) — an absent map entry for a PN already means "not found
+   * in that source", the same signal every other check is built from.
+   */
+
+  // Small link-style control that reveals a hidden detail row with full
+  // cross-source provenance for one part number. Kept structurally separate
+  // from wireExpanders()'s tree-row disclosure (different dataset
+  // attributes), since a single row can carry both a children-expander and
+  // a trace toggle at once.
+  function traceToggleEl(pn) {
+    const span = document.createElement('span');
+    span.className = 'trace-toggle';
+    span.textContent = 'trace';
+    span.dataset.traceFor = BC.normNumber(pn);
+    return span;
+  }
+
+  function occurrenceBreakdownEl(pn) {
+    const res = state.result;
+    const box = document.createElement('div');
+    // The Description-vs-CAD panel can render before "Compare BOMs" is ever
+    // clicked (it reruns as soon as a CAD file loads) — cadOccurrences/
+    // imOccurrences only exist once compareAll() has actually run.
+    if (!res) {
+      const note = document.createElement('div');
+      note.className = 'trace-none';
+      note.textContent = 'Run "Compare BOMs" to see where this part is found.';
+      box.appendChild(note);
+      return box;
+    }
+    const key = BC.normNumber(pn);
+    box.appendChild(breakdownTable('Found in CAD BOM', res.cadOccurrences.get(key), 'Not found in the CAD BOM.'));
+    box.appendChild(breakdownTable('Found in Item Master', res.imOccurrences.get(key), 'Not found in the Item Master.'));
+    return box;
+  }
+
+  function traceDetailRow(pn, colSpan) {
+    const tr = document.createElement('tr');
+    tr.className = 'hidden-row';
+    tr.dataset.traceId = BC.normNumber(pn);
+    const td = document.createElement('td');
+    td.colSpan = colSpan;
+    td.appendChild(occurrenceBreakdownEl(pn));
+    tr.appendChild(td);
+    return tr;
+  }
+
+  // Wires every '.trace-toggle' inside container to its sibling detail row
+  // (matched via data-trace-id, compared here in JS rather than built into a
+  // querySelector string, since a part number could contain characters that
+  // would need escaping there). Persists open/closed per part number in
+  // state.traceOpen so it survives this container being rebuilt on the next
+  // render — unlike state.sectionOpen, this Map is keyed by part number, not
+  // a fixed section id, and defaults to closed: a drill-down aid, not
+  // primary content.
+  function wireTraceToggles(container) {
+    const rowByKey = new Map();
+    container.querySelectorAll('tr[data-trace-id]').forEach(function (tr) { rowByKey.set(tr.dataset.traceId, tr); });
+    container.querySelectorAll('.trace-toggle').forEach(function (el) {
+      const key = el.dataset.traceFor;
+      const row = rowByKey.get(key);
+      if (!row) return;
+      if (state.traceOpen.get(key)) row.classList.remove('hidden-row');
+      el.addEventListener('click', function () {
+        const nowHidden = row.classList.toggle('hidden-row');
+        state.traceOpen.set(key, !nowHidden);
+      });
+    });
   }
 
   /* ----- qty tab ----- */
@@ -1797,23 +1923,35 @@
     });
   }
 
-  function breakdownTable(caption, entries) {
+  // notFoundText (optional): shown instead of an empty table when entries is
+  // empty/absent — the qty tab's two callers never hit this (a quantity
+  // mismatch requires the part to be in both sources), but it's what makes
+  // this function reusable for occurrenceBreakdownEl's "not found in X" case.
+  function breakdownTable(caption, entries, notFoundText) {
     const box = document.createElement('div');
     box.className = 'qty-breakdown';
     const cap = document.createElement('div');
     cap.textContent = caption + ':';
     box.appendChild(cap);
+    if (!entries || !entries.length) {
+      const none = document.createElement('div');
+      none.className = 'trace-none';
+      none.textContent = notFoundText || 'None found.';
+      box.appendChild(none);
+      return box;
+    }
     const t = document.createElement('table');
     const h = document.createElement('tr');
-    ['Row #', 'Parent assembly', 'Parent title', 'Qty per parent', 'Effective qty'].forEach(function (x) { addTh(h, x); });
+    ['Where', 'Parent assembly', 'Parent title', 'Qty per parent', 'Effective qty', 'File'].forEach(function (x) { addTh(h, x); });
     t.appendChild(h);
     for (const e of entries) {
       const tr = document.createElement('tr');
-      addTd(tr, e.sourceRow || '');
+      addTd(tr, e.page ? 'PDF page ' + e.page + ' (row ' + (e.sourceRow || '') + ')' : (e.sourceRow ? 'row ' + e.sourceRow : ''));
       addTd(tr, e.parentNumber || '(top level)');
       addTd(tr, e.parentTitle || '');
       addTd(tr, fmtQty(e.qty));
       addTd(tr, fmtQty(e.effQty));
+      addTd(tr, e.file || '');
       t.appendChild(tr);
     }
     box.appendChild(t);
@@ -2015,6 +2153,12 @@
       }
       box.appendChild(t);
       td.appendChild(box);
+      // The table above is entirely Item-Master-side (this part's orphaned
+      // children); it says nothing about where the virtual part ITSELF sits
+      // in the CAD BOM — the "Row #" column on the visible row is also
+      // Item-Master-side (js/virtual-parts.js reads it from imIndex, not the
+      // CAD source). Append the CAD-side occurrence(s) so that's covered too.
+      td.appendChild(occurrenceBreakdownEl(v.number));
       br.appendChild(td);
       table.appendChild(br);
     }
@@ -2059,6 +2203,7 @@
     addTh(htr, 'Parent Number');
     addTh(htr, 'Parent Title');
     table.appendChild(htr);
+    const colSpan = htr.children.length;
 
     let uid = 0;
     let anyShown = false;
@@ -2097,6 +2242,8 @@
         tdNum.appendChild(document.createTextNode(' '));
         tdNum.appendChild(badge);
       }
+      tdNum.appendChild(document.createTextNode(' '));
+      tdNum.appendChild(traceToggleEl(r.number));
       tr.appendChild(tdNum);
       if (depth === 0) decorateSecondary(tr, 'imOnly', r.number, tdNum);
       if (cols.title) addTd(tr, r.title);
@@ -2107,6 +2254,7 @@
       addTd(tr, r.parentNumber || '');
       addTd(tr, r.parentTitle || '');
       table.appendChild(tr);
+      table.appendChild(traceDetailRow(r.number, colSpan));
       for (const c of node.children || []) renderNode(c, depth + 1, id);
     };
     for (const n of roots) renderNode(n, 0, null);
@@ -2117,6 +2265,7 @@
     }
     pane.appendChild(table);
     wireExpanders(table);
+    wireTraceToggles(table);
   }
 
   function imOnlyTreeMatches(node) {

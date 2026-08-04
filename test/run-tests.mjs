@@ -41,6 +41,18 @@ function check(name, cond, extra) {
   else { failures++; console.error('FAIL  ' + name + (extra !== undefined ? ' — got: ' + JSON.stringify(extra) : '')); }
 }
 
+// Shape + whitespace check for parsed CAD part numbers, shared by every real
+// PDF sample below. Shape alone (no embedded-whitespace requirement) would
+// still pass a hyphen-glued corruption like "7-999-00732-1/64" undetected —
+// exactly the failure mode js/parsers/pdf-extract.js's footer floor + Part
+// Number concatenation guard exist to prevent.
+function checkCleanPns(label, items) {
+  const badShape = items.filter(i => !/^\d-\d{3}-\S+$/.test(i.number));
+  check(label + ': every record has a clean-shaped part number', badShape.length === 0, badShape.slice(0, 5).map(i => i.number));
+  const withSpace = items.filter(i => /\s/.test(i.number));
+  check(label + ': no part number contains embedded whitespace', withSpace.length === 0, withSpace.slice(0, 5).map(i => i.number));
+}
+
 /* ---------------- synthetic leveled-CAD tests ---------------- */
 
 console.log('\n== synthetic: leveled CAD parsing, exact grouping, qty roll-up ==');
@@ -654,6 +666,54 @@ console.log('\n== synthetic: Vault PDF table reconstruction ==');
   check('PDF CAD parses rows', cad && cad.items.length === 3, cad && cad.items.map(i => i.number));
   check('PDF Name column becomes file column', cad.items[0].file === '7-230-20509.iam' && cad.items[0].isAssembly === true, cad.items[0]);
   check('PDF indentation infers levels', cad.hasLevels === true && cad.items.map(i => i.level).join(',') === '1,2,3', cad && cad.items.map(i => i.level));
+}
+
+console.log('\n== synthetic: Vault PDF footer/pagination exclusion (2 pages) ==');
+{
+  // Reproduces the reported bug: a page-number footer ("N / total") sitting
+  // below the last real row on a page gets glued onto that row's Part
+  // Number, e.g. "7-999-00732" + " 1/64" -> "7-999-00732 1/64". This is
+  // covered by two independent layers in extractGrid (see js/parsers/
+  // pdf-extract.js) and this fixture is built to exercise both:
+  //  - page 1's footer sits well below the page's established row pitch, so
+  //    the footer-floor filter should drop it before it ever reaches a row.
+  //  - page 2's footer sits close enough to its nearest row that the floor
+  //    alone might not catch it — the Part Number concatenation guard (only
+  //    a fragment after a trailing "-" may extend a Part Number) is what
+  //    must reject it there instead.
+  const { pdfExtract } = require(path.join(rootDir, 'js/parsers/pdf-extract.js'));
+  global.BOMCompare = { cadLeveledParser };
+  const mk = (str, x, y, w = 30, h = 8) => ({ str, transform: [1, 0, 0, h, x, y], width: w });
+  const header = [
+    mk('Name', 33, 700), mk('Revision', 292, 700), mk('State', 355, 700), mk('Title', 438, 700), mk('Description', 642, 700), mk('Part', 825, 700),
+    mk('Number', 825, 690),
+  ];
+  const bomRow = (num, x, y, title, desc) => [
+    mk(num + '.ipt', x, y, 120), mk('0', 292, y), mk('Released', 371, y), mk(title, 438, y, 80), mk(desc, 642, y, 100), mk(num, 825, y, 70),
+  ];
+  const page1 = header
+    .concat(bomRow('7-111-11111', 64, 650, 'Part One', 'First part'))
+    .concat(bomRow('7-111-22222', 64, 610, 'Part Two', 'Second part'))
+    .concat([mk('1 / 2', 825, 430, 40)]); // far below the row pitch -> floor should drop it
+  const page2 = bomRow('7-111-33333', 64, 650, 'Part Three', 'Third part')
+    .concat(bomRow('7-111-44444', 64, 610, 'Part Four', 'Fourth part'))
+    .concat([mk('2 / 2', 825, 590, 40)]); // close to its row -> the concatenation guard must catch it
+  const pagesItems = [page1, page2];
+  const pdfjsLib = {
+    getDocument: () => ({
+      promise: Promise.resolve({
+        numPages: pagesItems.length,
+        getPage: async (p) => ({ getTextContent: async () => ({ items: pagesItems[p - 1] }) }),
+      }),
+    }),
+  };
+  const grid = await pdfExtract.extractGrid(new ArrayBuffer(0), { pdfjsLib });
+  const numbers = grid.rows.slice(1).map(r => r[5]);
+  check('all 4 part numbers recovered clean, no footer text attached',
+    JSON.stringify(numbers) === JSON.stringify(['7-111-11111', '7-111-22222', '7-111-33333', '7-111-44444']), numbers);
+  check('pageOf tracks each row\'s source page', JSON.stringify(grid.pageOf.slice(1)) === JSON.stringify([1, 1, 2, 2]), grid.pageOf);
+  check('the page-2 footer (too close for the floor alone) was caught and logged',
+    (grid.warnings || []).some(w => /discarded unexpected text/.test(w)), grid.warnings);
 }
 
 console.log('\n== synthetic: Item Master column-name robustness (itemmaster.js) ==');
@@ -1466,7 +1526,7 @@ async function parsePdf(file) {
   const { pdfExtract } = require(path.join(rootDir, 'js/parsers/pdf-extract.js'));
   const buf = new Uint8Array(fs.readFileSync(file)).buffer;
   const grid = await pdfExtract.extractGrid(buf, { pdfjsLib });
-  const parsed = cadLeveledParser.parse(grid.rows, { indents: grid.indents, source: 'pdf' });
+  const parsed = cadLeveledParser.parse(grid.rows, { indents: grid.indents, pageOf: grid.pageOf, source: 'pdf' });
   return { grid, parsed };
 }
 
@@ -1687,8 +1747,7 @@ if (pdf723Path && imPath && cadPath) {
     check('723 PDF parsed 1820 records', p723.items.length === 1820, p723.items.length);
     check('723 PDF has levels, no qty', p723.hasLevels === true && p723.hasQty === false);
     check('723 PDF hasRevision true — the Vault "Uses" report header includes Revision', p723.hasRevision === true, p723.hasRevision);
-    const badPn = p723.items.filter(i => !/^\d-\d{3}-\S+$/.test(i.number));
-    check('723 PDF: every record has a clean part number', badPn.length === 0, badPn.slice(0, 3).map(i => i.number));
+    checkCleanPns('723 PDF', p723.items);
 
     const imWb2 = XLSX.read(fs.readFileSync(imPath), { type: 'buffer' });
     const im2 = detect.parseItemMasterFromWorkbook(imWb2, XLSX);
@@ -1748,8 +1807,7 @@ if (pdf733Path && im733Path) {
     check('733 PDF: no extraction warnings', (g733.warnings || []).length === 0, g733.warnings);
     check('733 PDF parsed 226 records', p733.items.length === 226, p733.items.length);
     check('733 PDF has levels, no qty', p733.hasLevels === true && p733.hasQty === false);
-    const badPn733 = p733.items.filter(i => !/^\d-\d{3}-\S+$/.test(i.number));
-    check('733 PDF: every record has a clean part number', badPn733.length === 0, badPn733.slice(0, 5).map(i => i.number));
+    checkCleanPns('733 PDF', p733.items);
     const lvl733 = {};
     for (const it of p733.items) lvl733[it.level] = (lvl733[it.level] || 0) + 1;
     check('733 PDF level histogram matches indentation depth 1-7',

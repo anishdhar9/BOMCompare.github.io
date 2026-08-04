@@ -152,8 +152,12 @@
    * ------------------------------------------------------------------ */
 
   // Per-PN rolled-up totals for a leveled CAD BOM (levels + qty per row).
+  // Builds breakdowns unconditionally, even when the source has no quantity
+  // column — qty/effQty simply stay null then (mirrors indexItemMaster's
+  // breakdowns, which are never qty-gated either) — so callers that only
+  // want "every place this PN occurs" (e.g. compareAll's cadOccurrences,
+  // built for on-screen traceability) don't need a quantity column to work.
   function cadTotals(cad) {
-    if (!cad.hasQty) return { totals: null, breakdowns: null };
     const totals = new Map();
     const breakdowns = new Map();
     const stack = []; // {level, number, title, qty, effQty}
@@ -172,6 +176,8 @@
         qty: it.qty,
         effQty: eff,
         sourceRow: it.sourceRow || '',
+        page: it.page || null,
+        file: it.file || '',
       });
       if (it.qty === null || eff === null) totals.set(pn, null);
       else if (totals.get(pn) !== null || !totals.has(pn)) totals.set(pn, (totals.get(pn) || 0) + eff);
@@ -664,6 +670,26 @@
       referenceTotal = seenRef.size;
     }
 
+    // 5) cross-source occurrence index, for on-screen traceability — every
+    // place a PN was found in each loaded CAD source. Built over every
+    // source (not just qtySource) and regardless of whether any source has
+    // quantities, so a flagged row in any results list can point back at its
+    // own file/row/page (imOccurrences below covers the Item Master side)
+    // without the user reopening any of the uploaded files by hand. An
+    // absent PN in either map means "not found in that source" — the same
+    // signal "missing"/"in Item Master only" are already built from.
+    const cadOccurrences = new Map(); // PN -> [{source, fileName, sourceRow, page, file, parentNumber, parentTitle, qty, effQty}]
+    for (const src of [structure, bom]) {
+      if (!src) continue;
+      const ctSrc = cadTotals(src);
+      for (const [pn, occs] of ctSrc.breakdowns) {
+        const tagged = occs.map(function (o) {
+          return Object.assign({}, o, { source: src.source, fileName: src.fileName || '' });
+        });
+        cadOccurrences.set(pn, (cadOccurrences.get(pn) || []).concat(tagged));
+      }
+    }
+
     return {
       cadUniqueCount: cadPNs.size,
       imUniqueCount: imIndex.byNumber.size,
@@ -677,6 +703,8 @@
       imOnlyActionable: imOnlyRoots.length,
       referenceRoots: referenceRoots,         // null unless structure + intended-BOM sources present
       referenceTotal: referenceTotal,
+      cadOccurrences: cadOccurrences,         // PN -> [{source, fileName, sourceRow, page, file, parentNumber, parentTitle, qty, effQty}]
+      imOccurrences: imIndex.breakdowns,      // same shape, Item Master side
       hasQty: !!qtySource,
       hasLevels: structure.hasLevels,
       roles: {
