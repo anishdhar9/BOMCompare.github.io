@@ -8,13 +8,14 @@
       require('./itemmaster.js').itemMasterParser,
       require('./cad-flat-xlsx.js').cadFlatParser,
       require('./cad-leveled.js').cadLeveledParser,
-      require('./lldbo.js').lldboParser
+      require('./lldbo.js').lldboParser,
+      require('./ignorelist.js').ignoreListParser
     );
   } else {
     const bc = root.BOMCompare || {};
-    root.BOMCompare = Object.assign(bc, factory(bc.itemMasterParser, bc.cadFlatParser, bc.cadLeveledParser, bc.lldboParser));
+    root.BOMCompare = Object.assign(bc, factory(bc.itemMasterParser, bc.cadFlatParser, bc.cadLeveledParser, bc.lldboParser, bc.ignoreListParser));
   }
-})(typeof self !== 'undefined' ? self : this, function (itemMasterParser, cadFlatParser, cadLeveledParser, lldboParser) {
+})(typeof self !== 'undefined' ? self : this, function (itemMasterParser, cadFlatParser, cadLeveledParser, lldboParser, ignoreListParser) {
   'use strict';
 
   // Headers that only appear in the Item Master (Vault item/BOM grid) export.
@@ -61,6 +62,10 @@
     return lldboParser.parse(workbook, XLSX);
   }
 
+  function parseIgnoreListFromWorkbook(workbook, XLSX) {
+    return ignoreListParser.parse(workbook, XLSX);
+  }
+
   // Try the flat Vault paste first, then a leveled table. Returns:
   //   { ok: result } | { needsMapping: {analysis, aoa, sheetName} } | null
   function parseCadFromWorkbook(workbook, XLSX) {
@@ -98,6 +103,7 @@
       looksLikeLldbo: looksLikeLldbo,
       parseItemMasterFromWorkbook: parseItemMasterFromWorkbook,
       parseLldboFromWorkbook: parseLldboFromWorkbook,
+      parseIgnoreListFromWorkbook: parseIgnoreListFromWorkbook,
       parseCadFromWorkbook: parseCadFromWorkbook,
     },
   };

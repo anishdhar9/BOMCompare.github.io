@@ -20,6 +20,10 @@
  *                                                     CAD source — carries quantities and,
  *                                                     when the column was included, material)
  *   "PN<number>_LLDBO*.xlsx"                      -> long-lead parts list (optional)
+ *   "IgnoreList<code>.xlsx"                       -> ignore list (optional) — <code> is a
+ *                                                     3-letter product-line code (e.g. "HSG")
+ *                                                     and varies; only the "IgnoreList" prefix
+ *                                                     is this organization's fixed convention
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
@@ -30,6 +34,7 @@
   function classifyFolderFile(name) {
     if (!name) return null;
     if (/^PN\d+_LLDBO/i.test(name) && /\.xlsx?$/i.test(name)) return 'lldbo'; // checked before item-master: distinct prefix, no overlap risk
+    if (/^ignorelist/i.test(name) && /\.xlsx?$/i.test(name)) return 'ignore-list';
     if (/autodesk[ _-]*vault/i.test(name) && /\.pdf$/i.test(name)) return 'cad-pdf';
     if (/^inventor[ _-]*bom/i.test(name) && /\.xlsx?$/i.test(name)) return 'inventor-bom';
     if (/^ebom/i.test(name) && /\.xlsx?$/i.test(name)) return 'item-master';
@@ -42,7 +47,7 @@
   // classifyFolderFile. Kept separate from any DOM/picker call so it's
   // testable with a plain mock, no browser needed.
   async function scanFolder(directoryHandle) {
-    const found = { 'cad-pdf': [], 'item-master': [], 'lldbo': [], 'inventor-bom': [] };
+    const found = { 'cad-pdf': [], 'item-master': [], 'lldbo': [], 'inventor-bom': [], 'ignore-list': [] };
     for await (const entry of directoryHandle.values()) {
       if (entry.kind !== 'file') continue;
       const kind = classifyFolderFile(entry.name);

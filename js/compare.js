@@ -540,18 +540,75 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * Ignore list
+   * ------------------------------------------------------------------ *
+   * A user-supplied Ignore List (js/parsers/ignorelist.js, resolved to a
+   * predicate by js/ignorelist-compare.js) names parts intentionally left in
+   * a non-standard BOM state that should not be reported by specific checks.
+   * Applied here — not in app.js's renderers or findings.js's registry — so
+   * every consumer of compareAll()'s output (results tabs, tile counts,
+   * "Parts needing attention") already sees ignored parts removed, with
+   * nothing to special-case downstream.
+   */
+
+  // Removes any node `isIgnored(pn, checkKey)` flags, promoting its children
+  // to its own parent's level (or the root list) so they remain independent
+  // findings instead of vanishing along with a suppressed grouping parent —
+  // they may not themselves be ignored. Pushes a flat, UI-ready record for
+  // each removed node onto `collector`, so the "Ignored findings" section
+  // can show exactly what was suppressed and from where.
+  function filterIgnoredTree(roots, isIgnored, checkKey, collector) {
+    const out = [];
+    for (const node of roots || []) {
+      const pn = normNumber(node.item.number);
+      if (isIgnored(pn, checkKey)) {
+        collector.push({
+          checkKey: checkKey, number: node.item.number, title: node.item.title || '',
+          description: node.item.description || '', sourceRow: node.item.sourceRow || '',
+          parentNumber: '', parentTitle: '',
+        });
+        for (const promoted of filterIgnoredTree(node.children || [], isIgnored, checkKey, collector)) out.push(promoted);
+      } else {
+        node.children = filterIgnoredTree(node.children || [], isIgnored, checkKey, collector);
+        out.push(node);
+      }
+    }
+    return out;
+  }
+
+  // Same idea for a flat (non-tree) findings list, e.g. qtyMismatches.
+  function filterIgnoredFlat(list, isIgnored, checkKey, collector) {
+    const kept = [];
+    for (const r of list || []) {
+      const pn = normNumber(r.number);
+      if (isIgnored(pn, checkKey)) {
+        collector.push({
+          checkKey: checkKey, number: r.number, title: r.title || '', description: r.description || '',
+          sourceRow: r.sourceRow || '', parentNumber: r.parentNumber || '', parentTitle: r.parentTitle || '',
+        });
+      } else {
+        kept.push(r);
+      }
+    }
+    return kept;
+  }
+
+  /* ------------------------------------------------------------------ *
    * Main entry
    * ------------------------------------------------------------------ */
 
   // cadSources: one or two parsed CAD results (e.g. Vault PDF + Inventor xlsx)
   // opts (optional): { virtualAnchorRows: Map<PN, imRow> } from
-  // js/virtual-parts.js — see the imOnly grouping below.
+  // js/virtual-parts.js — see the imOnly grouping below; { isIgnored(pn,
+  // checkKey) } from js/ignorelist-compare.js — see "Ignore list" above.
   function compareAll(cadSources, im, opts) {
     const imIndex = indexItemMaster(im);
     const roles = pickRoles(cadSources);
     const structure = roles.structure;
     const bom = roles.bom;
     const inIM = function (pn) { return imIndex.byNumber.has(pn); };
+    const isIgnored = (opts && opts.isIgnored) || function () { return false; };
+    const ignoredFindings = []; // flat, UI-ready — collected below as each check is filtered
 
     const cadPNs = new Set();
     const firstCadItem = new Map(); // PN -> item (first occurrence, structure source wins)
@@ -569,7 +626,7 @@
     // that only exist in the intended-BOM export (virtual components have no
     // CAD file, so they never appear in the Vault PDF) are appended as
     // standalone findings.
-    const missingRoots = structure.hasLevels
+    let missingRoots = structure.hasLevels
       ? groupMissingLeveled(structure, inIM)
       : groupMissingFlat(structure, inIM, imIndex.childSets);
     if (bom) {
@@ -583,8 +640,9 @@
         missingRoots.push(makeNode(it));
       }
     }
+    missingRoots = filterIgnoredTree(missingRoots, isIgnored, 'missing', ignoredFindings);
     let missingTotal = 0;
-    for (const pn of cadPNs) if (!inIM(pn)) missingTotal++;
+    for (const pn of cadPNs) if (!inIM(pn) && !isIgnored(pn, 'missing')) missingTotal++;
 
     // 2) quantity mismatches — from whichever source carries quantities
     const qtySource = (bom && bom.hasQty) ? bom : (structure.hasQty ? structure : null);
@@ -612,10 +670,11 @@
         }
       }
       qtyMismatches.sort(function (a, b) { return a.number < b.number ? -1 : 1; });
+      qtyMismatches = filterIgnoredFlat(qtyMismatches, isIgnored, 'qty', ignoredFindings);
     }
 
     // 3) in Item Master only
-    const imOnly = [];
+    const imOnlyRaw = [];
     const seenImOnly = new Set();
     for (const row of im.rows) {
       const pn = normNumber(row.number);
@@ -634,8 +693,14 @@
       // so grouping can still resolve the real ancestor chain. Non-enumerable
       // so it never leaks into an export sheet.
       Object.defineProperty(entry, '__srcRow', { value: row, enumerable: false });
-      imOnly.push(entry);
+      imOnlyRaw.push(entry);
     }
+    // Filtered before grouping (not after) so groupImOnly() builds its tree
+    // fresh from the already-ignored-free flat list — an ignored row's
+    // non-ignored children then attach to the next real ancestor on their
+    // own, the same promotion groupImOnly already does for any child whose
+    // immediate parent isn't itself flagged.
+    const imOnly = filterIgnoredFlat(imOnlyRaw, isIgnored, 'imOnly', ignoredFindings);
     // Virtual parts (js/virtual-parts.js, computed by the caller since it is
     // a separate module) act as grouping anchors: they ARE in the CAD BOM, so
     // they are not Item-Master-only rows themselves, but their whole child BOM
@@ -662,10 +727,11 @@
           annotate(n.children);
         }
       })(referenceRoots);
+      referenceRoots = filterIgnoredTree(referenceRoots, isIgnored, 'reference', ignoredFindings);
       const seenRef = new Set();
       for (const it of structure.items) {
         const pn = normNumber(it.number);
-        if (pn && !inBom(pn) && !seenRef.has(pn)) seenRef.add(pn);
+        if (pn && !inBom(pn) && !seenRef.has(pn) && !isIgnored(pn, 'reference')) seenRef.add(pn);
       }
       referenceTotal = seenRef.size;
     }
@@ -703,6 +769,7 @@
       imOnlyActionable: imOnlyRoots.length,
       referenceRoots: referenceRoots,         // null unless structure + intended-BOM sources present
       referenceTotal: referenceTotal,
+      ignoredFindings: ignoredFindings,       // [{checkKey, number, title, description, sourceRow, parentNumber, parentTitle}] — suppressed by the Ignore List
       cadOccurrences: cadOccurrences,         // PN -> [{source, fileName, sourceRow, page, file, parentNumber, parentTitle, qty, effQty}]
       imOccurrences: imIndex.breakdowns,      // same shape, Item Master side
       hasQty: !!qtySource,
@@ -730,5 +797,7 @@
     countDescendants: countDescendants,
     groupImOnly: groupImOnly,
     detectQuantityCascades: detectQuantityCascades,
+    filterIgnoredTree: filterIgnoredTree,
+    filterIgnoredFlat: filterIgnoredFlat,
   };
 });
