@@ -30,6 +30,8 @@ const { findings } = require(path.join(rootDir, 'js/findings.js'));
 const { folder } = require(path.join(rootDir, 'js/folder.js'));
 const { lldboParser } = require(path.join(rootDir, 'js/parsers/lldbo.js'));
 const { lldboCompare } = require(path.join(rootDir, 'js/lldbo-compare.js'));
+const { ignoreListParser } = require(path.join(rootDir, 'js/parsers/ignorelist.js'));
+const { ignoreListCompare } = require(path.join(rootDir, 'js/ignorelist-compare.js'));
 const { imDiffCompare } = require(path.join(rootDir, 'js/im-diff-compare.js'));
 const { titleDescCompare } = require(path.join(rootDir, 'js/titledesc-compare.js'));
 const { virtualParts } = require(path.join(rootDir, 'js/virtual-parts.js'));
@@ -714,6 +716,115 @@ console.log('\n== synthetic: Vault PDF footer/pagination exclusion (2 pages) =='
   check('pageOf tracks each row\'s source page', JSON.stringify(grid.pageOf.slice(1)) === JSON.stringify([1, 1, 2, 2]), grid.pageOf);
   check('the page-2 footer (too close for the floor alone) was caught and logged',
     (grid.warnings || []).some(w => /discarded unexpected text/.test(w)), grid.warnings);
+}
+
+console.log('\n== synthetic: Ignore List — parsing and category mapping ==');
+{
+  const aoa = [
+    ['S.No.', 'Part Number', 'From'],
+    ['1', 'IGNORED-MISSING', 'CAD vs Item compare'],
+    ['2', 'ignored-qty', ' CAD VS ITEM COMPARE '], // case/whitespace-insensitive match
+    ['3', 'IGNORED-UNKNOWN', 'Some Other Category'], // unrecognized -> reported, not applied
+    ['4', '', 'CAD vs Item compare'], // blank part number -> skipped
+  ];
+  const wb = { SheetNames: ['Sheet1'], Sheets: { Sheet1: {} } };
+  const XLSXStub = { utils: { sheet_to_json: () => aoa } };
+  const parsed = ignoreListParser.parse(wb, XLSXStub);
+  check('ignore list parsed', !!parsed, parsed);
+  check('ignore list: 3 rows (blank Part Number row skipped)', parsed.rows.length === 3, parsed.rows.length);
+  check('ignore list: sourceRow is the real spreadsheet row', parsed.rows[0].sourceRow === 2, parsed.rows[0]);
+  check('non-Ignore-List sheet (no "Part Number" header) returns null',
+    ignoreListParser.parse(wb, { utils: { sheet_to_json: () => [['Number', 'Title'], ['X', 'Y']] } }) === null);
+
+  const idx = ignoreListCompare.buildIgnoreIndex(parsed);
+  check('recognized category resolves case/whitespace-insensitively',
+    idx.isIgnored('IGNORED-MISSING', 'missing') && idx.isIgnored('ignored-qty', 'qty'));
+  check('recognized category covers all 4 CAD-vs-Item-Master keys',
+    ['missing', 'reference', 'qty', 'imOnly'].every(k => idx.isIgnored('IGNORED-MISSING', k)));
+  check('recognized category does not cover an unrelated key', !idx.isIgnored('IGNORED-MISSING', 'material'));
+  check('unrecognized "From" value is reported, not silently applied',
+    idx.unrecognized.length === 1 && idx.unrecognized[0].number === 'IGNORED-UNKNOWN' && !idx.isIgnored('IGNORED-UNKNOWN', 'missing'),
+    idx.unrecognized);
+  check('buildIgnoreIndex(null) is a safe no-op', ignoreListCompare.buildIgnoreIndex(null).isIgnored('ANY', 'missing') === false);
+}
+
+console.log('\n== synthetic: Ignore List suppresses compareAll() findings, with child promotion ==');
+{
+  // Machine -> IGNORED-ASSY (missing, ignored; children CHILD-1 kept, IGNORED-CHILD also ignored)
+  //         -> PART-A (missing, not ignored)
+  //         -> PART-B (qty mismatch, ignored)
+  //         -> PART-C (qty mismatch, not ignored)
+  const aoa = [
+    ['Item', 'Number', 'Title', 'QTY', 'File'],
+    ['1', 'MACH-01', 'Machine', '1', 'mach.iam'],
+    ['1.1', 'IGNORED-ASSY', 'Ignored assembly', '1', 'ia.iam'],
+    ['1.1.1', 'CHILD-1', 'Kept child', '2', 'c1.ipt'],
+    ['1.1.2', 'IGNORED-CHILD', 'Also ignored child', '1', 'c2.ipt'],
+    ['1.2', 'PART-A', 'Not ignored, missing', '1', 'pa.ipt'],
+    ['1.3', 'PART-B', 'Ignored qty mismatch', '5', 'pb.ipt'],
+    ['1.4', 'PART-C', 'Not ignored qty mismatch', '5', 'pc.ipt'],
+  ];
+  const cad = cadLeveledParser.parse(aoa, { source: 'leveled-sheet' });
+  const im = {
+    rows: [
+      { number: 'MACH-01', title: 'Machine', qty: null, path: [] },
+      { number: 'PART-B', title: '', qty: 3, path: ['1'] },
+      { number: 'PART-C', title: '', qty: 3, path: ['2'] },
+    ],
+  };
+  const ignoreList = {
+    rows: [
+      { number: 'IGNORED-ASSY', from: 'CAD vs Item compare', sourceRow: 2 },
+      { number: 'IGNORED-CHILD', from: 'CAD vs Item compare', sourceRow: 3 },
+      { number: 'PART-B', from: 'CAD vs Item compare', sourceRow: 4 },
+    ],
+  };
+  const idx = ignoreListCompare.buildIgnoreIndex(ignoreList);
+  const res = compareAll([cad], im, { isIgnored: idx.isIgnored });
+
+  check('IGNORED-ASSY removed from the missing tree',
+    !res.missingRoots.some(n => n.item.number === 'IGNORED-ASSY'), res.missingRoots.map(n => n.item.number));
+  check('CHILD-1 (not ignored) promoted to its own root finding instead of vanishing with its ignored parent',
+    res.missingRoots.some(n => n.item.number === 'CHILD-1' && n.children.length === 0), res.missingRoots.map(n => n.item.number));
+  check('IGNORED-CHILD (also ignored) does not reappear anywhere',
+    !res.missingRoots.some(n => n.item.number === 'IGNORED-CHILD'));
+  check('PART-A (not ignored) still reported missing', res.missingRoots.some(n => n.item.number === 'PART-A'));
+  check('missingTotal excludes both ignored parts (counts CHILD-1 + PART-A only)', res.missingTotal === 2, res.missingTotal);
+
+  check('PART-B qty mismatch suppressed', !res.qtyMismatches.some(m => m.number === 'PART-B'), res.qtyMismatches.map(m => m.number));
+  check('PART-C qty mismatch still reported', res.qtyMismatches.some(m => m.number === 'PART-C'), res.qtyMismatches.map(m => m.number));
+
+  check('ignoredFindings records all 3 suppressed occurrences', res.ignoredFindings.length === 3, res.ignoredFindings);
+  check('ignoredFindings tags each occurrence with the right checkKey',
+    res.ignoredFindings.find(f => f.number === 'IGNORED-ASSY').checkKey === 'missing' &&
+    res.ignoredFindings.find(f => f.number === 'IGNORED-CHILD').checkKey === 'missing' &&
+    res.ignoredFindings.find(f => f.number === 'PART-B').checkKey === 'qty',
+    res.ignoredFindings);
+
+  // Findings registry: ignored parts are filtered upstream (in compareAll),
+  // so buildRegistry() needs no ignore-list awareness of its own — verifying
+  // that here doubles as regression coverage for that design assumption.
+  const reg = findings.buildRegistry({ result: res });
+  check('findings registry never sees the ignored parts at all',
+    !reg.byPn.has('IGNORED-ASSY') && !reg.byPn.has('IGNORED-CHILD') && !reg.byPn.has('PART-B'),
+    Array.from(reg.byPn.keys()));
+  check('findings registry still reports the non-ignored parts',
+    reg.byPn.has('CHILD-1') && reg.byPn.has('PART-A') && reg.byPn.has('PART-C'),
+    Array.from(reg.byPn.keys()));
+
+  // No ignore predicate at all (the ordinary case) must reproduce the exact
+  // same tree compareAll() already produced before this feature existed.
+  const resNoIgnore = compareAll([cad], im, {});
+  check('without an ignore predicate, nothing is suppressed (backward compatible)',
+    resNoIgnore.missingRoots.some(n => n.item.number === 'IGNORED-ASSY') && resNoIgnore.ignoredFindings.length === 0,
+    resNoIgnore.missingRoots.map(n => n.item.number));
+}
+
+console.log('\n== synthetic: folder classification recognizes the Ignore List filename ==');
+{
+  check('classifyFolderFile("IgnoreListHSG.xlsx") = ignore-list', folder.classifyFolderFile('IgnoreListHSG.xlsx') === 'ignore-list');
+  check('classifyFolderFile("IgnoreListGFB.xls") = ignore-list', folder.classifyFolderFile('IgnoreListGFB.xls') === 'ignore-list');
+  check('classifyFolderFile("ignorelist.xlsx") = ignore-list (case-insensitive)', folder.classifyFolderFile('ignorelist.xlsx') === 'ignore-list');
 }
 
 console.log('\n== synthetic: Item Master column-name robustness (itemmaster.js) ==');

@@ -339,5 +339,5 @@
     };
   }
 
-  return { findings: { buildRegistry: buildRegistry, CHECKS: CHECKS, normNumber: normNumber } };
+  return { findings: { buildRegistry: buildRegistry, CHECKS: CHECKS, CHECK_BY_KEY: CHECK_BY_KEY, normNumber: normNumber } };
 });

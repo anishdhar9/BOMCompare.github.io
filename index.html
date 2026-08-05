@@ -117,6 +117,26 @@
       <div id="lldbo-sections"></div>
     </section>
 
+    <section class="im-qc" id="ignorelist-panel">
+      <div class="im-qc-head">
+        <div>
+          <h2>Ignore List <span class="optional-tag">optional</span></h2>
+          <p class="dz-hint">Parts intentionally left in a non-standard BOM state (e.g. still Reference, or a WIP/sketch placeholder) that should not be flagged. Drop the "IgnoreList" file — its "From" column names which check to suppress each part from. Suppressed parts are removed from the checks named there and listed separately, in the collapsible "Ignored findings" section near the bottom of the page.</p>
+        </div>
+      </div>
+      <div class="dropzone dropzone-inline" id="zone-ignorelist" data-role="ignorelist" tabindex="0">
+        <input type="file" id="file-ignorelist" accept=".xlsx,.xls" hidden>
+        <div class="dz-inner">
+          <p class="dz-hint">Drop the "IgnoreList*" file here</p>
+          <p class="dz-file" id="status-file-ignorelist"></p>
+          <div class="dz-chips" id="status-chips-ignorelist"></div>
+          <p class="dz-error" id="status-error-ignorelist"></p>
+          <button type="button" class="btn btn-small" id="pick-ignorelist">Choose file</button>
+        </div>
+      </div>
+      <p class="notice warn hidden" id="ignorelist-category-warning"></p>
+    </section>
+
     <section class="mapping hidden" id="mapping-panel">
       <h2>Assign columns</h2>
       <p>The app could not identify the CAD BOM's columns automatically. Tell the app which column holds each field. Only Part Number is required.</p>
@@ -159,6 +179,17 @@
       <div class="tab-pane hidden" id="pane-cascade"></div>
       <div class="tab-pane hidden" id="pane-virtual"></div>
       <div class="tab-pane hidden" id="pane-imonly"></div>
+    </section>
+
+    <section class="im-qc hidden" id="ignored-findings">
+      <div class="im-qc-head im-qc-head-toggle" id="ignored-findings-head">
+        <div>
+          <h2>Ignored findings</h2>
+          <p class="dz-hint">Parts matched by the Ignore List — suppressed from the checks named in its "From" column. Shown here for transparency, collapsed by default.</p>
+        </div>
+        <span class="qc-pill na" id="ignored-findings-count"></span>
+      </div>
+      <div id="ignored-findings-body" class="qc-section-body"></div>
     </section>
 
     <section class="howto">
@@ -220,6 +251,7 @@
   <script src="js/parsers/cad-leveled.js"></script>
   <script src="js/parsers/pdf-extract.js"></script>
   <script src="js/parsers/lldbo.js"></script>
+  <script src="js/parsers/ignorelist.js"></script>
   <script src="js/parsers/detect.js"></script>
   <script src="js/imqc.js"></script>
   <script src="js/findings.js"></script>
@@ -228,6 +260,7 @@
   <script src="js/titledesc-compare.js"></script>
   <script src="js/virtual-parts.js"></script>
   <script src="js/lldbo-compare.js"></script>
+  <script src="js/ignorelist-compare.js"></script>
   <script src="js/folder.js"></script>
   <script src="js/app.js"></script>
 </body>

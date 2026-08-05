@@ -21,6 +21,7 @@
     folderHandle: null, // FileSystemDirectoryHandle from "Load from folder", if used
     lldbo: null,         // parsed LLDBO result (+ fileName), optional
     lldboResult: null,   // js/lldbo-compare.js compareLldbo() result
+    ignoreList: null,    // parsed js/parsers/ignorelist.js result (+ fileName), optional
     materialResult: null, // js/material-compare.js compareMaterial() result
     revisionResult: null, // js/revision-compare.js compareRevision() result
     titleDescResult: null, // js/titledesc-compare.js compareTitleDescription() result
@@ -334,6 +335,81 @@
       state.lldboResult = null;
       hideLldboResults();
       setLldboStatus(file.name, [], e.message || String(e));
+    }
+  }
+
+  /* ---------------- Ignore List handling ---------------- */
+
+  function setIgnoreListStatus(fileName, chips, error) {
+    $('status-file-ignorelist').textContent = fileName || '';
+    const chipBox = $('status-chips-ignorelist');
+    chipBox.innerHTML = '';
+    chipEls(chipBox, chips);
+    $('status-error-ignorelist').textContent = error || '';
+    const zone = $('zone-ignorelist');
+    zone.classList.toggle('parsed', !error && !!fileName && !!state.ignoreList);
+    zone.classList.toggle('error', !!error);
+  }
+
+  function chipsForIgnoreList(ignoreList) {
+    const chips = [{ text: 'Ignore List', kind: 'good' }, { text: ignoreList.rows.length + ' parts' }];
+    if (ignoreList.warnings && ignoreList.warnings.length) {
+      chips.push({ text: ignoreList.warnings.length + ' note(s)', kind: 'warn', title: ignoreList.warnings.join('\n') });
+    }
+    return chips;
+  }
+
+  // Shows/hides the "unrecognized From value" notice right at upload time —
+  // this only depends on the ignore list's own data plus the fixed category
+  // table, not on a comparison having run, so it doesn't wait for renderDashboard.
+  function showIgnoreListCategoryWarning(ignoreList) {
+    const warnEl = $('ignorelist-category-warning');
+    const idx = BC.ignoreListCompare.buildIgnoreIndex(ignoreList);
+    if (idx.unrecognized.length) {
+      const names = Array.from(new Set(idx.unrecognized.map(function (w) { return '"' + w.from + '"'; }))).join(', ');
+      warnEl.textContent = '⚠ ' + idx.unrecognized.length + ' row(s) have an unrecognized "From" value (' + names +
+        ') — not applied. Recognized values: "CAD vs Item compare".';
+      warnEl.classList.remove('hidden');
+    } else {
+      warnEl.classList.add('hidden');
+      warnEl.textContent = '';
+    }
+  }
+
+  // The ignore list only takes effect through compareAll() (see js/compare.js
+  // and js/ignorelist-compare.js), so re-applying it after a change means
+  // re-running the comparison, not just re-rendering stale results — the
+  // same runCompare() the "Compare BOMs" button and folder auto-load use.
+  function applyIgnoreListChange() {
+    if (state.result) runCompare();
+    else renderDashboard();
+  }
+
+  function handleIgnoreListWorkbook(file, wb) {
+    const ignoreList = BC.detect.parseIgnoreListFromWorkbook(wb, XLSX);
+    if (!ignoreList) {
+      const asIm = BC.detect.parseItemMasterFromWorkbook(wb, XLSX);
+      if (asIm) throw new Error('This looks like an Item Master export — drop it on the Item Master box above instead.');
+      throw new Error('No "Part Number" header row found. Expected the Ignore List file ("IgnoreList*").');
+    }
+    ignoreList.fileName = file.name;
+    state.ignoreList = ignoreList;
+    setIgnoreListStatus(file.name, chipsForIgnoreList(ignoreList), '');
+    showIgnoreListCategoryWarning(ignoreList);
+    applyIgnoreListChange();
+  }
+
+  async function handleIgnoreListFile(file) {
+    try {
+      if (/\.pdf$/i.test(file.name)) throw new Error('Ignore List is an Excel file, not a PDF.');
+      const buf = await readFileAsArrayBuffer(file);
+      const wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: false });
+      handleIgnoreListWorkbook(file, wb);
+    } catch (e) {
+      state.ignoreList = null;
+      setIgnoreListStatus(file.name, [], e.message || String(e));
+      $('ignorelist-category-warning').classList.add('hidden');
+      applyIgnoreListChange();
     }
   }
 
@@ -761,6 +837,7 @@
     const dash = $('dashboard');
     rebuildFindings();
     renderAttention();
+    renderIgnoredFindings();
     if (!state.im && !state.cadSources.length) { dash.classList.add('hidden'); return; }
     dash.classList.remove('hidden');
     setSourceLine($('dash-source'));
@@ -930,6 +1007,50 @@
   // index.html survives every re-render with no state bookkeeping needed).
   $('attention-head').addEventListener('click', function () {
     $('attention-body').classList.toggle('open');
+  });
+
+  const IGNORED_FINDINGS_COLS = [
+    ['number', 'Part Number'], ['title', 'Title'], ['description', 'Description'],
+    ['label', 'Would have been flagged as'], ['sourceRow', 'Row #'], ['parentNumber', 'Parent Number'], ['parentTitle', 'Parent Title'],
+  ];
+
+  // Parts the Ignore List suppressed from the checks named in its "From"
+  // column (js/compare.js's compareAll(), via js/ignorelist-compare.js) —
+  // listed here for transparency instead of just vanishing, but collapsed by
+  // default: a review/audit list, not something needing action. Only visible
+  // once an Ignore List is loaded — before that there's nothing to show.
+  function renderIgnoredFindings() {
+    const sec = $('ignored-findings');
+    const body = $('ignored-findings-body');
+    body.innerHTML = '';
+    if (!state.ignoreList) { sec.classList.add('hidden'); return; }
+    sec.classList.remove('hidden');
+    const list = (state.result && state.result.ignoredFindings) || [];
+    $('ignored-findings-count').textContent = list.length + ' SUPPRESSED';
+    if (!list.length) {
+      body.innerHTML = '<div class="empty-state">' + (state.result
+        ? 'No currently-flaggable part matches the Ignore List — nothing is being suppressed right now.'
+        : 'Run "Compare BOMs" to apply the Ignore List.') + '</div>';
+      return;
+    }
+    const table = document.createElement('table');
+    table.className = 'results-table';
+    const htr = document.createElement('tr');
+    for (const [, label] of IGNORED_FINDINGS_COLS) addTh(htr, label);
+    table.appendChild(htr);
+    for (const row of list) {
+      const tr = document.createElement('tr');
+      for (const [key] of IGNORED_FINDINGS_COLS) {
+        addTd(tr, key === 'label' ? (BC.findings.CHECK_BY_KEY[row.checkKey] || {}).label || row.checkKey : row[key]);
+      }
+      table.appendChild(tr);
+    }
+    body.appendChild(table);
+  }
+
+  // Same rebuild-proof toggle as #attention-head above.
+  $('ignored-findings-head').addEventListener('click', function () {
+    $('ignored-findings-body').classList.toggle('open');
   });
 
   // AOA rows for the "Parts needing attention" export sheet — one row per part
@@ -1474,8 +1595,9 @@
     // only" rollup group a virtual subassembly's orphaned children under it,
     // instead of scattering them as one unexplained finding each.
     state.virtualResult = BC.virtualParts.detectVirtualParts(state.cadSources, state.im, BC.indexItemMaster);
+    const ignoreIdx = BC.ignoreListCompare.buildIgnoreIndex(state.ignoreList);
     state.result = BC.compareAll(state.cadSources, state.im,
-      { virtualAnchorRows: state.virtualResult.anchorRows });
+      { virtualAnchorRows: state.virtualResult.anchorRows, isIgnored: ignoreIdx.isIgnored });
     const res = state.result;
     if (!res.hasQty) {
       notice('warn', 'None of the CAD BOM sources has a quantity column, so quantity comparison is disabled. ' +
@@ -2479,6 +2601,15 @@
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lldboSheetRows(state.lldboResult)), 'LLDBO check');
     }
 
+    if (res.ignoredFindings && res.ignoredFindings.length) {
+      const ignored = [['Part Number', 'Title', 'Description', 'Would have been flagged as', 'Row #', 'Parent Number', 'Parent Title']];
+      for (const r of res.ignoredFindings) {
+        ignored.push([r.number, r.title, r.description, (BC.findings.CHECK_BY_KEY[r.checkKey] || {}).label || r.checkKey,
+          r.sourceRow || '', r.parentNumber || '', r.parentTitle || '']);
+      }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ignored), 'Ignored findings');
+    }
+
     return wb;
   }
 
@@ -2541,6 +2672,30 @@
       ev.preventDefault();
       zone.classList.remove('dragover');
       if (ev.dataTransfer.files && ev.dataTransfer.files[0]) handleLldboFile(ev.dataTransfer.files[0]);
+    });
+  }
+
+  // Ignore List: same single-file, optional-zone shape as LLDBO above.
+  function wireIgnoreListZone() {
+    const zone = $('zone-ignorelist');
+    const input = $('file-ignorelist');
+    const pick = $('pick-ignorelist');
+    const open = function () { input.click(); };
+    zone.addEventListener('click', function (ev) { if (!ev.target.closest('button')) open(); });
+    pick.addEventListener('click', function (ev) { ev.stopPropagation(); open(); });
+    zone.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
+    });
+    input.addEventListener('change', function () {
+      if (input.files && input.files[0]) handleIgnoreListFile(input.files[0]);
+      input.value = '';
+    });
+    zone.addEventListener('dragover', function (ev) { ev.preventDefault(); zone.classList.add('dragover'); });
+    zone.addEventListener('dragleave', function () { zone.classList.remove('dragover'); });
+    zone.addEventListener('drop', function (ev) {
+      ev.preventDefault();
+      zone.classList.remove('dragover');
+      if (ev.dataTransfer.files && ev.dataTransfer.files[0]) handleIgnoreListFile(ev.dataTransfer.files[0]);
     });
   }
 
@@ -2611,7 +2766,9 @@
     const imMsg = await loadFolderMatch(found['item-master'], 'Item Master (EBOM_*)', function (f) { return handleFiles('im', [f]); }, false);
     const invMsg = await loadFolderMatch(found['inventor-bom'], 'Inventor BOM export (INVENTOR_BOM_*)', function (f) { return handleFiles('cad', [f]); }, true);
     const lldboMsg = await loadFolderMatch(found['lldbo'], 'LLDBO file', handleLldboFile, true);
-    const matchSummary = '"' + handle.name + '" — CAD: ' + cadMsg + ' · Item Master: ' + imMsg + ' · Inventor BOM: ' + invMsg + ' · LLDBO: ' + lldboMsg;
+    const ignoreMsg = await loadFolderMatch(found['ignore-list'], 'Ignore List file', handleIgnoreListFile, true);
+    const matchSummary = '"' + handle.name + '" — CAD: ' + cadMsg + ' · Item Master: ' + imMsg + ' · Inventor BOM: ' + invMsg +
+      ' · LLDBO: ' + lldboMsg + ' · Ignore List: ' + ignoreMsg;
     folderStatus(matchSummary);
 
     if (state.cadSources.length && state.im) {
@@ -2629,6 +2786,7 @@
   wireZone('cad');
   wireZone('im');
   wireLldboZone();
+  wireIgnoreListZone();
   renderColumnsMenu();
   setupFolderFeature();
 })();
