@@ -368,7 +368,7 @@
     if (idx.unrecognized.length) {
       const names = Array.from(new Set(idx.unrecognized.map(function (w) { return '"' + w.from + '"'; }))).join(', ');
       warnEl.textContent = '⚠ ' + idx.unrecognized.length + ' row(s) have an unrecognized "From" value (' + names +
-        ') — not applied. Recognized values: "CAD vs Item compare", "Quantity Mismatch".';
+        ') — not applied. Recognized values: "CAD vs Item compare", "Quantity Mismatch", "All".';
       warnEl.classList.remove('hidden');
     } else {
       warnEl.classList.add('hidden');

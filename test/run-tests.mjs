@@ -755,6 +755,20 @@ console.log('\n== synthetic: Ignore List — parsing and category mapping ==');
   check('"Quantity Mismatch" category suppresses qty', idxQty.isIgnored('IGNORED-QTY-ONLY', 'qty'));
   check('"Quantity Mismatch" category does NOT suppress missing/reference/imOnly',
     !idxQty.isIgnored('IGNORED-QTY-ONLY', 'missing') && !idxQty.isIgnored('IGNORED-QTY-ONLY', 'reference') && !idxQty.isIgnored('IGNORED-QTY-ONLY', 'imOnly'));
+
+  // "All" is the broadest category: the union of every other category,
+  // computed rather than hardcoded — so it stays complete even as more
+  // categories get added later, not just the ones known at the time it
+  // was written.
+  const idxAll = ignoreListCompare.buildIgnoreIndex({ rows: [{ number: 'IGNORED-ALL', from: ' ALL ', sourceRow: 6 }] });
+  check('"All" category (mixed case/whitespace in the file) resolves and applies',
+    idxAll.isIgnored('IGNORED-ALL', 'missing'), idxAll.byPn.get('IGNORED-ALL'));
+  check('"All" category suppresses every key any other category maps to',
+    Object.keys(ignoreListCompare.CATEGORIES).filter(c => c !== 'all')
+      .every(cat => ignoreListCompare.CATEGORIES[cat].every(k => idxAll.isIgnored('IGNORED-ALL', k))),
+    ignoreListCompare.CATEGORIES);
+  check('"All" specifically covers missing/reference/qty/imOnly today',
+    ['missing', 'reference', 'qty', 'imOnly'].every(k => idxAll.isIgnored('IGNORED-ALL', k)));
 }
 
 console.log('\n== synthetic: Ignore List suppresses compareAll() findings, with child promotion ==');
