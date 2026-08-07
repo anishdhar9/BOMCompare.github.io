@@ -76,6 +76,17 @@
       <div id="attention-body" class="qc-section-body open"></div>
     </section>
 
+    <section class="im-qc hidden" id="reviewed-parts">
+      <div class="im-qc-head im-qc-head-toggle" id="reviewed-parts-head">
+        <div>
+          <h2>Already reviewed</h2>
+          <p class="dz-hint">Parts checked off from "Parts needing attention" above. They stay out of that list until you bring them back — saved in this browser, so it survives closing the page.</p>
+        </div>
+        <span class="qc-pill na" id="reviewed-parts-count"></span>
+      </div>
+      <div id="reviewed-parts-body" class="qc-section-body"></div>
+    </section>
+
     <section class="im-qc hidden" id="im-qc">
       <div class="im-qc-head">
         <div>
@@ -199,6 +210,7 @@
           <li><strong>Overview dashboard:</strong> a panel at the top shows one clickable tile per flag value (findings, quantity, material and revision mismatches, and Item Master quality issues). Each tile is color-coded, and tiles appear as data loads. Click a tile to jump straight to its details below. The dashboard and each section always show the exact source file or files being compared. This keeps two exports of the same BOM, with different Vault columns enabled, traceable.</li>
           <li><strong>One finding per part:</strong> the same part can legitimately be caught by several checks at once. For example, a part can be in the Item Master but not in CAD, <em>and</em> its Quantity and Item Qty can also disagree. The app does not report this as several problems. Instead, it ranks findings by severity: missing, then reference, then quantity, then revision, then material, then in-Item-Master-only, then the data-quality checks. Each part is owned by its most serious check. Every other mention renders muted, with an “also in: …” pointer. The <strong>Parts needing attention</strong> table at the top lists each part once, with all of its issues.</li>
           <li><strong>Allied parts:</strong> the app rolls up related parts, instead of repeating them. A missing assembly already absorbed its children. “In Item Master only” now does the same, over the Item Master's own Row Order hierarchy. A whole subassembly absent from the CAD BOM is one finding, not one finding per part (on a real export, 1033 rows became 11). Grouped children are not part of the actionable count. Click “show N grouped” to reveal them. The per-occurrence rows inside a quantity mismatch stay as they are. They show where the part is used, and are not duplicates.</li>
+          <li><strong>Reviewing parts:</strong> tick the checkbox on a row in “Parts needing attention” once you've looked into it — it moves to the “Already reviewed” section right below, and the tile counts drop to match. This is remembered in your browser (not the exported file), so it's still there next time you open the app, even after reloading a fresh comparison. Click “Un-review” on a part in “Already reviewed” to bring it back.</li>
           <li><strong>Match key:</strong> the part number (the Vault item “Number” field), not case-sensitive.</li>
           <li><strong>CAD BOM sources:</strong> upload one file, or, for best results, two files together.
             <ul>

@@ -10,6 +10,18 @@
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
   }
 
+  // "Mark reviewed" on "Parts needing attention" — persisted so a part you've
+  // already looked into stays out of the way across reloads, not just for the
+  // current session. Keyed by part number only (not per-check): reviewing a
+  // part is "I looked at this part", independent of which check flagged it.
+  const REVIEWED_LS_KEY = 'bomcompare.reviewed.v1';
+  function loadReviewed() {
+    try {
+      const arr = JSON.parse(localStorage.getItem(REVIEWED_LS_KEY) || '[]');
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (e) { return new Set(); }
+  }
+
   const state = {
     cadSources: [],     // parsed CAD results (max 2: full structure + intended BOM)
     im: null,           // parsed Item Master result (+ fileName)
@@ -31,7 +43,24 @@
     ignoreBoughtOutRevision: false, // "Revision" section: hide bought-out (X-999-*) parts
     sectionOpen: new Map(),  // qc-section id -> user override, survives re-renders
     traceOpen: new Map(),    // part number -> provenance-detail toggle open?, survives re-renders
+    reviewedSet: loadReviewed(), // part numbers checked off "Parts needing attention", survives reloads (localStorage)
+    attentionVisibleCount: 0,    // unreviewed, non-grouped part count — set by renderAttention(), read by the dashboard tile
   };
+
+  function saveReviewed() {
+    try { localStorage.setItem(REVIEWED_LS_KEY, JSON.stringify(Array.from(state.reviewedSet))); } catch (e) { /* ignore */ }
+  }
+  function isReviewed(pn) { return state.reviewedSet.has(BC.normNumber(pn)); }
+  // val: true marks reviewed (hides from "Parts needing attention"), false
+  // brings it back. Re-renders the dashboard so both the attention list and
+  // the "Already reviewed" section pick up the change immediately.
+  function setReviewed(pn, val) {
+    const key = BC.normNumber(pn);
+    if (!key) return;
+    if (val) state.reviewedSet.add(key); else state.reviewedSet.delete(key);
+    saveReviewed();
+    renderDashboard();
+  }
 
   // Base name suffix from the Item Master's SPN/PN project key, e.g.
   // '_SPN016823_PN22426'. Empty string when no key was found.
@@ -840,8 +869,9 @@
   function renderDashboard() {
     const dash = $('dashboard');
     rebuildFindings();
-    renderAttention();
+    renderAttention(); // sets state.attentionVisibleCount, used by the tile below
     renderIgnoredFindings();
+    renderReviewedParts();
     if (!state.im && !state.cadSources.length) { dash.classList.add('hidden'); return; }
     dash.classList.remove('hidden');
     setSourceLine($('dash-source'));
@@ -853,10 +883,10 @@
     const reg = state.findings;
     if (reg && reg.counts.parts) {
       tiles.push({
-        num: reg.counts.actionable,
+        num: state.attentionVisibleCount,
         label: 'Parts needing attention',
         sub: reg.counts.grouped ? '+' + reg.counts.grouped + ' grouped under a parent' : 'unique parts, worst issue first',
-        cls: reg.counts.actionable ? 'red' : 'pass',
+        cls: state.attentionVisibleCount ? 'red' : 'pass',
         onClick: function () { jumpTo('attention'); },
       });
     }
@@ -944,15 +974,14 @@
     const body = $('attention-body');
     const reg = state.findings;
     body.innerHTML = '';
-    if (!reg || !reg.counts.parts) { sec.classList.add('hidden'); return; }
+    if (!reg || !reg.counts.parts) { sec.classList.add('hidden'); state.attentionVisibleCount = 0; return; }
     sec.classList.remove('hidden');
-    $('attention-count').textContent = reg.counts.actionable + ' PART(S)' +
-      (reg.counts.grouped ? ' · ' + reg.counts.grouped + ' GROUPED' : '');
 
     const cols = visibleCols();
     const table = document.createElement('table');
     table.className = 'results-table';
     const htr = document.createElement('tr');
+    addTh(htr, 'Reviewed');
     addTh(htr, 'Part Number');
     if (cols.title) addTh(htr, 'Title');
     addTh(htr, 'Issues found');
@@ -961,13 +990,33 @@
     addTh(htr, 'Grouped under');
     table.appendChild(htr);
 
-    const shown = reg.parts.filter(function (p) {
+    // Reviewed parts are pulled out before the grouped/filter split below, so
+    // they never count toward "needing attention" — see "Already reviewed"
+    // for how to bring one back.
+    const unreviewed = reg.parts.filter(function (p) { return !isReviewed(p.number); });
+    const reviewedCount = reg.parts.length - unreviewed.length;
+    state.attentionVisibleCount = unreviewed.filter(function (p) { return !p.grouped; }).length;
+    $('attention-count').textContent = state.attentionVisibleCount + ' PART(S)' +
+      (reg.counts.grouped ? ' · ' + reg.counts.grouped + ' GROUPED' : '') +
+      (reviewedCount ? ' · ' + reviewedCount + ' REVIEWED' : '');
+
+    const shown = unreviewed.filter(function (p) {
       if (!state.showGrouped && p.grouped) return false;
       return matchesFilter([p.number, p.title, p.description]);
     });
     for (const part of shown) {
       const tr = document.createElement('tr');
       tr.className = 'attention-row' + (part.grouped ? ' row-child' : '');
+      const tdReviewed = document.createElement('td');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.title = 'Mark reviewed — hides it here; bring it back from "Already reviewed" below';
+      cb.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        setReviewed(part.number, true);
+      });
+      tdReviewed.appendChild(cb);
+      tr.appendChild(tdReviewed);
       const tdNum = document.createElement('td');
       tdNum.className = 'num-cell';
       tdNum.textContent = part.number;
@@ -989,7 +1038,10 @@
       table.appendChild(tr);
     }
     if (!shown.length) {
-      body.innerHTML = '<div class="empty-state">' + (state.filter ? 'Nothing matches the filter.' : '✓ No parts flagged by any check.') + '</div>';
+      const msg = state.filter ? 'Nothing matches the filter.'
+        : (unreviewed.length ? 'Nothing shown — everything left is grouped under a flagged parent.'
+          : (reviewedCount ? '✓ All flagged parts are marked reviewed — see "Already reviewed" below.' : '✓ No parts flagged by any check.'));
+      body.innerHTML = '<div class="empty-state">' + msg + '</div>';
     } else {
       body.appendChild(table);
     }
@@ -1059,6 +1111,57 @@
   // Same rebuild-proof toggle as #attention-head above.
   $('ignored-findings-head').addEventListener('click', function () {
     $('ignored-findings-body').classList.toggle('open');
+  });
+
+  const REVIEWED_PARTS_COLS = [['number', 'Part Number'], ['title', 'Title']];
+
+  // Parts checked off "Parts needing attention" — the undo bin for that
+  // checkbox. Driven by state.reviewedSet (persisted, see loadReviewed()
+  // above), cross-referenced against the current findings registry for
+  // display; a part no longer flagged by anything (e.g. the underlying issue
+  // was fixed) still shows here so it can be un-reviewed and cleared out.
+  function renderReviewedParts() {
+    const sec = $('reviewed-parts');
+    const body = $('reviewed-parts-body');
+    body.innerHTML = '';
+    if (!state.reviewedSet.size) { sec.classList.add('hidden'); return; }
+    sec.classList.remove('hidden');
+    const reg = state.findings;
+    const rows = Array.from(state.reviewedSet).sort().map(function (pn) {
+      return { pn: pn, part: reg ? reg.byPn.get(pn) : null };
+    });
+    $('reviewed-parts-count').textContent = rows.length + ' REVIEWED';
+    const table = document.createElement('table');
+    table.className = 'results-table';
+    const htr = document.createElement('tr');
+    addTh(htr, '');
+    for (const [, label] of REVIEWED_PARTS_COLS) addTh(htr, label);
+    addTh(htr, 'Issue(s) when reviewed');
+    table.appendChild(htr);
+    for (const row of rows) {
+      const tr = document.createElement('tr');
+      const tdBtn = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'attention-toggle';
+      btn.textContent = 'Un-review';
+      btn.title = 'Bring this part back into "Parts needing attention"';
+      btn.addEventListener('click', function () { setReviewed(row.pn, false); });
+      tdBtn.appendChild(btn);
+      tr.appendChild(tdBtn);
+      for (const [key] of REVIEWED_PARTS_COLS) addTd(tr, row.part ? row.part[key] : (key === 'number' ? row.pn : ''));
+      const tdIssues = document.createElement('td');
+      if (row.part) { for (const i of row.part.issues) tdIssues.appendChild(issueBadgeEl(i)); }
+      else tdIssues.textContent = 'no longer flagged by any check';
+      tr.appendChild(tdIssues);
+      table.appendChild(tr);
+    }
+    body.appendChild(table);
+  }
+
+  // Same rebuild-proof toggle as #attention-head above.
+  $('reviewed-parts-head').addEventListener('click', function () {
+    $('reviewed-parts-body').classList.toggle('open');
   });
 
   // AOA rows for the "Parts needing attention" export sheet — one row per part
