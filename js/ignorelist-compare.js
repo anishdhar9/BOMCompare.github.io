@@ -25,14 +25,18 @@
   }
 
   // "From" text (as written in the Ignore List) -> which of compareAll()'s
-  // check keys it suppresses. Only the CAD-vs-Item-Master comparison keys
-  // are covered today, since that's the only category seen in real Ignore
-  // List files so far — Item Master QC / Material / Revision / Description
-  // checks aren't wired to the ignore list yet. Add a new category here (and
-  // to the recognized-values text in app.js's warning message) if a "From"
-  // value for one of those is needed later.
+  // check keys it suppresses. "cad vs item compare" is the broad, catch-all
+  // category (covers all four); "quantity mismatch" is a narrower one for a
+  // part that should still be flagged if genuinely missing/reference/
+  // in-Item-Master-only, but has an accepted, known quantity discrepancy
+  // that shouldn't keep getting reported. The two are independent — a part
+  // can be listed under either or both. Item Master QC / Material /
+  // Revision / Description checks aren't wired to the ignore list yet. Add
+  // a new category here (and to the recognized-values text in app.js's
+  // warning message) if a "From" value for one of those is needed later.
   const CATEGORIES = {
     'cad vs item compare': ['missing', 'reference', 'qty', 'imOnly'],
+    'quantity mismatch': ['qty'],
   };
 
   // Returns { isIgnored(pn, checkKey), byPn: Map<PN, Set<checkKey>>, unrecognized:[{number, from, sourceRow}] }.

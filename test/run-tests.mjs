@@ -746,6 +746,15 @@ console.log('\n== synthetic: Ignore List — parsing and category mapping ==');
     idx.unrecognized.length === 1 && idx.unrecognized[0].number === 'IGNORED-UNKNOWN' && !idx.isIgnored('IGNORED-UNKNOWN', 'missing'),
     idx.unrecognized);
   check('buildIgnoreIndex(null) is a safe no-op', ignoreListCompare.buildIgnoreIndex(null).isIgnored('ANY', 'missing') === false);
+
+  // "Quantity Mismatch" is the narrower category: a part still gets flagged
+  // if genuinely missing/reference/in-Item-Master-only, only qty is suppressed.
+  const idxQty = ignoreListCompare.buildIgnoreIndex({ rows: [{ number: 'IGNORED-QTY-ONLY', from: 'Quantity Mismatch', sourceRow: 5 }] });
+  check('"Quantity Mismatch" category resolves case/whitespace-insensitively too',
+    ignoreListCompare.buildIgnoreIndex({ rows: [{ number: 'X', from: ' quantity  MISMATCH ', sourceRow: 1 }] }).isIgnored('X', 'qty'));
+  check('"Quantity Mismatch" category suppresses qty', idxQty.isIgnored('IGNORED-QTY-ONLY', 'qty'));
+  check('"Quantity Mismatch" category does NOT suppress missing/reference/imOnly',
+    !idxQty.isIgnored('IGNORED-QTY-ONLY', 'missing') && !idxQty.isIgnored('IGNORED-QTY-ONLY', 'reference') && !idxQty.isIgnored('IGNORED-QTY-ONLY', 'imOnly'));
 }
 
 console.log('\n== synthetic: Ignore List suppresses compareAll() findings, with child promotion ==');
