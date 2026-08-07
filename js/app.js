@@ -28,6 +28,7 @@
     virtualResult: null,   // js/virtual-parts.js detectVirtualParts() result
     findings: null,       // js/findings.js buildRegistry() — cross-check registry
     showGrouped: false,   // "parts needing attention": reveal grouped children
+    ignoreBoughtOutRevision: false, // "Revision" section: hide bought-out (X-999-*) parts
     sectionOpen: new Map(),  // qc-section id -> user override, survives re-renders
     traceOpen: new Map(),    // part number -> provenance-detail toggle open?, survives re-renders
   };
@@ -368,7 +369,7 @@
     if (idx.unrecognized.length) {
       const names = Array.from(new Set(idx.unrecognized.map(function (w) { return '"' + w.from + '"'; }))).join(', ');
       warnEl.textContent = '⚠ ' + idx.unrecognized.length + ' row(s) have an unrecognized "From" value (' + names +
-        ') — not applied. Recognized values: "CAD vs Item compare", "Quantity Mismatch", "All".';
+        ') — not applied. Recognized values: "CAD vs Item compare", "Quantity Mismatch", "Revision", "All".';
       warnEl.classList.remove('hidden');
     } else {
       warnEl.classList.add('hidden');
@@ -376,11 +377,14 @@
     }
   }
 
-  // The ignore list only takes effect through compareAll() (see js/compare.js
-  // and js/ignorelist-compare.js), so re-applying it after a change means
-  // re-running the comparison, not just re-rendering stale results — the
-  // same runCompare() the "Compare BOMs" button and folder auto-load use.
+  // The ignore list only takes effect through compareAll() and
+  // compareRevision() (see js/compare.js, js/revision-compare.js and
+  // js/ignorelist-compare.js), so re-applying it after a change means
+  // re-running both, not just re-rendering stale results — the same
+  // runCompare() the "Compare BOMs" button and folder auto-load use, plus
+  // runRevisionCheck() (harmless no-op if no Item Master is loaded yet).
   function applyIgnoreListChange() {
+    runRevisionCheck();
     if (state.result) runCompare();
     else renderDashboard();
   }
@@ -1014,21 +1018,25 @@
     ['label', 'Would have been flagged as'], ['sourceRow', 'Row #'], ['parentNumber', 'Parent Number'], ['parentTitle', 'Parent Title'],
   ];
 
-  // Parts the Ignore List suppressed from the checks named in its "From"
-  // column (js/compare.js's compareAll(), via js/ignorelist-compare.js) —
-  // listed here for transparency instead of just vanishing, but collapsed by
-  // default: a review/audit list, not something needing action. Only visible
-  // once an Ignore List is loaded — before that there's nothing to show.
+  // Parts suppressed from the checks that support it — the file-based Ignore
+  // List (js/compare.js's compareAll() and js/revision-compare.js's
+  // compareRevision(), via js/ignorelist-compare.js) plus the in-session
+  // "ignore bought-out parts" toggle on the Revision section — listed here
+  // for transparency instead of just vanishing, but collapsed by default: a
+  // review/audit list, not something needing action. Only visible once
+  // there's something that could be suppressing a finding — before that
+  // there's nothing to show.
   function renderIgnoredFindings() {
     const sec = $('ignored-findings');
     const body = $('ignored-findings-body');
     body.innerHTML = '';
-    if (!state.ignoreList) { sec.classList.add('hidden'); return; }
+    if (!state.ignoreList && !state.ignoreBoughtOutRevision) { sec.classList.add('hidden'); return; }
     sec.classList.remove('hidden');
-    const list = (state.result && state.result.ignoredFindings) || [];
+    const list = ((state.result && state.result.ignoredFindings) || [])
+      .concat((state.revisionResult && state.revisionResult.ignoredFindings) || []);
     $('ignored-findings-count').textContent = list.length + ' SUPPRESSED';
     if (!list.length) {
-      body.innerHTML = '<div class="empty-state">' + (state.result
+      body.innerHTML = '<div class="empty-state">' + (state.result || state.revisionResult
         ? 'No currently-flaggable part matches the Ignore List — nothing is being suppressed right now.'
         : 'Run "Compare BOMs" to apply the Ignore List.') + '</div>';
       return;
@@ -1432,9 +1440,18 @@
     renderDashboard();
   }
 
+  // Combines the file-based Ignore List with the in-session "ignore
+  // bought-out parts" toggle below into the single isIgnored(pn, checkKey)
+  // predicate compareRevision() expects — same shape runCompare() builds
+  // for compareAll(), just with one extra source.
   function runRevisionCheck() {
     if (!state.im) { state.revisionResult = null; hideRevisionResults(); return; }
-    state.revisionResult = BC.revisionCompare.compareRevision(state.cadSources, state.im);
+    const ignoreIdx = BC.ignoreListCompare.buildIgnoreIndex(state.ignoreList);
+    const isIgnored = function (pn, checkKey) {
+      if (checkKey === 'revision' && state.ignoreBoughtOutRevision && BC.imQc.PURCHASED_PART_RE.test(pn)) return true;
+      return ignoreIdx.isIgnored(pn, checkKey);
+    };
+    state.revisionResult = BC.revisionCompare.compareRevision(state.cadSources, state.im, { isIgnored: isIgnored });
     renderRevisionPanel();
     renderResults(); // the main summary row's Revision mismatches card depends on this
     if (state.imQc) renderImQc(); // Check 7's card reflects state.revisionResult too — see relatedWarningFor()
@@ -1442,6 +1459,26 @@
 
   const REVISION_MISMATCH_COLS = [['number', 'Part Number'], ['title', 'Title']].concat(LOCATION_COLS).concat(
     [['imRevision', 'Item Master Revision'], ['cadRevision', 'CAD Revision']]);
+
+  // Quick in-session toggle for bought-out/purchased parts (X-999-*, see
+  // js/imqc.js's PURCHASED_PART_RE) — these often carry a vendor's own
+  // revision scheme rather than this org's, so a mismatch here is frequently
+  // expected noise. Separate from the file-based Ignore List: no upload
+  // needed, just a click, and it re-runs through the same isIgnored
+  // predicate so it shows up in "Ignored findings" like any other suppression.
+  function revisionBoughtOutToggleEl() {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'attention-toggle';
+    btn.textContent = state.ignoreBoughtOutRevision
+      ? 'Bought-out parts (X-999-*) hidden from this list — click to show them'
+      : 'Ignore bought-out parts (X-999-*) from this list';
+    btn.addEventListener('click', function () {
+      state.ignoreBoughtOutRevision = !state.ignoreBoughtOutRevision;
+      runRevisionCheck();
+    });
+    return btn;
+  }
 
   function renderRevisionPanel() {
     const res = state.revisionResult;
@@ -1451,6 +1488,7 @@
     rebuildFindings(); // rows below are decorated against it
 
     if (res.applicable) {
+      sections.appendChild(revisionBoughtOutToggleEl());
       sections.appendChild(lldboSectionFor(
         'Revision: CAD vs Item Master',
         'Compares CAD revision (' + (res.cadSourceFileName ? '"' + res.cadSourceFileName + '"' : 'the loaded CAD source') +
@@ -2601,9 +2639,11 @@
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lldboSheetRows(state.lldboResult)), 'LLDBO check');
     }
 
-    if (res.ignoredFindings && res.ignoredFindings.length) {
+    const allIgnored = (res.ignoredFindings || [])
+      .concat((state.revisionResult && state.revisionResult.ignoredFindings) || []);
+    if (allIgnored.length) {
       const ignored = [['Part Number', 'Title', 'Description', 'Would have been flagged as', 'Row #', 'Parent Number', 'Parent Title']];
-      for (const r of res.ignoredFindings) {
+      for (const r of allIgnored) {
         ignored.push([r.number, r.title, r.description, (BC.findings.CHECK_BY_KEY[r.checkKey] || {}).label || r.checkKey,
           r.sourceRow || '', r.parentNumber || '', r.parentTitle || '']);
       }

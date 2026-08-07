@@ -18,12 +18,12 @@
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = factory(require('./imqc.js').imQc);
+    module.exports = factory(require('./imqc.js').imQc, require('./compare.js'));
   } else {
     const bc = root.BOMCompare || {};
-    root.BOMCompare = Object.assign(bc, factory(bc.imQc));
+    root.BOMCompare = Object.assign(bc, factory(bc.imQc, bc));
   }
-})(typeof self !== 'undefined' ? self : this, function (imQc) {
+})(typeof self !== 'undefined' ? self : this, function (imQc, compareLib) {
   'use strict';
 
   function normRevision(v) {
@@ -59,7 +59,10 @@
   }
 
   // cadSources: the array passed to compareAll (0-2 CAD sources).
-  function compareRevision(cadSources, im) {
+  // opts (optional): { isIgnored(pn, checkKey) } from js/ignorelist-compare.js
+  // and/or js/app.js's bought-out-parts toggle — same predicate shape
+  // js/compare.js's compareAll() uses, checked here against 'revision'.
+  function compareRevision(cadSources, im, opts) {
     if (!im.hasRevision) {
       return { applicable: false, reason: 'No "Revision" column found in this Item Master export.' };
     }
@@ -67,6 +70,8 @@
     if (!cad) {
       return { applicable: false, reason: 'No loaded CAD source carries revision data.' };
     }
+    var isIgnored = (opts && opts.isIgnored) || function () { return false; };
+    var ignoredFindings = [];
 
     var pathIndex = imQc.buildPathIndex(im.rows);
     var mismatches = [];
@@ -93,10 +98,13 @@
       }
     }
 
+    mismatches = compareLib.filterIgnoredFlat(mismatches, isIgnored, 'revision', ignoredFindings);
+
     return {
       applicable: true,
       cadSourceFileName: cad.source.fileName || '',
       mismatches: mismatches,
+      ignoredFindings: ignoredFindings,
     };
   }
 

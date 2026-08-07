@@ -756,6 +756,15 @@ console.log('\n== synthetic: Ignore List — parsing and category mapping ==');
   check('"Quantity Mismatch" category does NOT suppress missing/reference/imOnly',
     !idxQty.isIgnored('IGNORED-QTY-ONLY', 'missing') && !idxQty.isIgnored('IGNORED-QTY-ONLY', 'reference') && !idxQty.isIgnored('IGNORED-QTY-ONLY', 'imOnly'));
 
+  // "Revision" suppresses js/revision-compare.js's compareRevision() — a
+  // separate module from compareAll(), reusing the same checkKey mechanism.
+  const idxRevision = ignoreListCompare.buildIgnoreIndex({ rows: [{ number: 'IGNORED-REV', from: 'Revision', sourceRow: 7 }] });
+  check('"Revision" category resolves case/whitespace-insensitively too',
+    ignoreListCompare.buildIgnoreIndex({ rows: [{ number: 'X', from: ' revision ', sourceRow: 1 }] }).isIgnored('X', 'revision'));
+  check('"Revision" category suppresses revision', idxRevision.isIgnored('IGNORED-REV', 'revision'));
+  check('"Revision" category does NOT suppress missing/reference/qty/imOnly',
+    !idxRevision.isIgnored('IGNORED-REV', 'missing') && !idxRevision.isIgnored('IGNORED-REV', 'qty') && !idxRevision.isIgnored('IGNORED-REV', 'imOnly'));
+
   // "All" is the broadest category: the union of every other category,
   // computed rather than hardcoded — so it stays complete even as more
   // categories get added later, not just the ones known at the time it
@@ -769,6 +778,8 @@ console.log('\n== synthetic: Ignore List — parsing and category mapping ==');
     ignoreListCompare.CATEGORIES);
   check('"All" specifically covers missing/reference/qty/imOnly today',
     ['missing', 'reference', 'qty', 'imOnly'].every(k => idxAll.isIgnored('IGNORED-ALL', k)));
+  check('"All" also covers revision — proves the computed union stayed in sync when the category was added',
+    idxAll.isIgnored('IGNORED-ALL', 'revision'));
 }
 
 console.log('\n== synthetic: Ignore List suppresses compareAll() findings, with child promotion ==');
@@ -1210,6 +1221,36 @@ console.log('\n== synthetic: Revision Consistency (c7) + Revision: CAD vs Item M
   check('revisionsMatch: exact values match, case/whitespace-insensitive', revisionCompare.revisionsMatch(' b ', 'B'));
   check('revisionsMatch: different values do not match', !revisionCompare.revisionsMatch('A', 'B'));
   check('revisionsMatch: blank never matches', !revisionCompare.revisionsMatch('', 'A') && !revisionCompare.revisionsMatch('A', ''));
+
+  // Ignore List support: opts.isIgnored(pn, 'revision') suppresses a
+  // mismatch and records it in ignoredFindings, mirroring compareAll()'s
+  // filterIgnoredFlat (js/compare.js) — reused directly by revision-compare.js.
+  const revIgnorePartY = revisionCompare.compareRevision([cadSource], im,
+    { isIgnored: (pn, key) => key === 'revision' && pn === 'PART-Y' });
+  check('opts.isIgnored suppresses the matching mismatch', revIgnorePartY.mismatches.length === 0, revIgnorePartY.mismatches);
+  check('opts.isIgnored records the suppression in ignoredFindings',
+    revIgnorePartY.ignoredFindings.length === 1 && revIgnorePartY.ignoredFindings[0].checkKey === 'revision' &&
+    revIgnorePartY.ignoredFindings[0].number === 'PART-Y', revIgnorePartY.ignoredFindings);
+  check('opts.isIgnored is only checked against the "revision" key',
+    revisionCompare.compareRevision([cadSource], im, { isIgnored: (pn, key) => key === 'missing' }).mismatches.length === 1);
+  check('without opts.isIgnored, behaves exactly as before (backward compatible)',
+    rev.mismatches.length === 1 && rev.ignoredFindings.length === 0, rev.ignoredFindings);
+
+  // js/app.js's "ignore bought-out parts (X-999-*)" button builds a predicate
+  // combining imQc.PURCHASED_PART_RE with the file-based Ignore List, exactly
+  // like this — verified directly against that shared regex so a change to
+  // the convention is caught here too.
+  const boughtOutCad = {
+    kind: 'cad', hasRevision: true, fileName: 'inventor.xlsx',
+    items: [{ number: '7-999-00001', revision: '9' }],
+  };
+  const boughtOutIm = { hasRevision: true, rows: [{ number: '7-999-00001', title: 'Bearing', revision: '5', sourceRow: 2, path: [] }] };
+  const boughtOutIsIgnored = (pn, key) => key === 'revision' && imQc.PURCHASED_PART_RE.test(pn);
+  const revBoughtOut = revisionCompare.compareRevision([boughtOutCad], boughtOutIm, { isIgnored: boughtOutIsIgnored });
+  check('bought-out (X-999-*) revision mismatch suppressed by the PURCHASED_PART_RE-based predicate',
+    revBoughtOut.mismatches.length === 0 && revBoughtOut.ignoredFindings.length === 1, revBoughtOut);
+  check('same bought-out part, toggle off (no isIgnored), is reported normally',
+    revisionCompare.compareRevision([boughtOutCad], boughtOutIm).mismatches.length === 1);
 }
 
 console.log('\n== synthetic: sketch parts in Item Master (c8) + item state (c9) ==');
