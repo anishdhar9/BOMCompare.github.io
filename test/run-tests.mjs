@@ -765,6 +765,16 @@ console.log('\n== synthetic: Ignore List — parsing and category mapping ==');
   check('"Revision" category does NOT suppress missing/reference/qty/imOnly',
     !idxRevision.isIgnored('IGNORED-REV', 'missing') && !idxRevision.isIgnored('IGNORED-REV', 'qty') && !idxRevision.isIgnored('IGNORED-REV', 'imOnly'));
 
+  // "LLDBO Candidate" suppresses js/lldbo-compare.js's detectLldboCandidates()
+  // — a separate module from compareAll(), reusing the same checkKey mechanism.
+  const idxLldboCand = ignoreListCompare.buildIgnoreIndex({ rows: [{ number: 'IGNORED-CAND', from: 'LLDBO Candidate', sourceRow: 8 }] });
+  check('"LLDBO Candidate" category resolves case/whitespace-insensitively too',
+    ignoreListCompare.buildIgnoreIndex({ rows: [{ number: 'X', from: ' lldbo   candidate ', sourceRow: 1 }] }).isIgnored('X', 'lldboCandidate'));
+  check('"LLDBO Candidate" category suppresses lldboCandidate', idxLldboCand.isIgnored('IGNORED-CAND', 'lldboCandidate'));
+  check('"LLDBO Candidate" category does NOT suppress missing/reference/qty/imOnly/revision',
+    !idxLldboCand.isIgnored('IGNORED-CAND', 'missing') && !idxLldboCand.isIgnored('IGNORED-CAND', 'qty') &&
+    !idxLldboCand.isIgnored('IGNORED-CAND', 'imOnly') && !idxLldboCand.isIgnored('IGNORED-CAND', 'revision'));
+
   // "All" is the broadest category: the union of every other category,
   // computed rather than hardcoded — so it stays complete even as more
   // categories get added later, not just the ones known at the time it
@@ -780,6 +790,8 @@ console.log('\n== synthetic: Ignore List — parsing and category mapping ==');
     ['missing', 'reference', 'qty', 'imOnly'].every(k => idxAll.isIgnored('IGNORED-ALL', k)));
   check('"All" also covers revision — proves the computed union stayed in sync when the category was added',
     idxAll.isIgnored('IGNORED-ALL', 'revision'));
+  check('"All" also covers lldboCandidate — proves the computed union stayed in sync when the category was added',
+    idxAll.isIgnored('IGNORED-ALL', 'lldboCandidate'));
 }
 
 console.log('\n== synthetic: Ignore List suppresses compareAll() findings, with child promotion ==');
@@ -1609,6 +1621,90 @@ console.log('\n== synthetic: LLDBO parsing + comparison against Item Master ==')
   check('detect.looksLikeLldbo recognizes the real layout', looksLikeLldbo === true);
 }
 
+console.log('\n== synthetic: LLDBO candidate detection (detectLldboCandidates) ==');
+{
+  const candAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)'],
+    ['MACH-01', '-', 'Test Machine', 'root row, should never be a candidate even though it says Motor'],
+    ['7-909-00001', '1', 'END OF LINE', 'sentinel row, should never be a candidate even though it says Seal'],
+    ['7-999-AAA', '2', 'AC Motor 3PH', 'drive motor'],
+    ['7-999-AAA', '3', 'AC Motor 3PH', 'drive motor'],          // same PN again at a different position -> dedup
+    ['7-999-BBB', '4', 'Seal Kit', 'shaft seal'],
+    ['7-234-CCC', '5', 'Motor mounting bracket', 'holds the motor in place'], // review tier: keyword, not 999-numbered
+    ['7-234-DDD', '6', 'Pneum.Dichtung DN200', ''],              // review tier: German seal keyword, not 999-numbered
+    ['7-100-ORD', '7', 'Ordinary bracket', 'no keyword here'],   // not a candidate at all
+  ];
+  const candIm = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, { utils: { sheet_to_json: () => candAoa } });
+
+  const preview = lldboCompare.detectLldboCandidates(candIm, null, {});
+  check('preview (no LLDBO loaded): not cross-checked', preview.crossChecked === false);
+  check('preview: confident tier = AAA + BBB (999-numbered, deduped, root/EOL excluded)',
+    preview.confident.length === 2 && preview.confident.some(c => c.number === '7-999-AAA') && preview.confident.some(c => c.number === '7-999-BBB'),
+    preview.confident.map(c => c.number));
+  check('preview: review tier = CCC + DDD (keyword match, not 999-numbered)',
+    preview.review.length === 2 && preview.review.some(c => c.number === '7-234-CCC') && preview.review.some(c => c.number === '7-234-DDD'),
+    preview.review.map(c => c.number));
+  check('preview: ordinary part with no keyword never classified',
+    !preview.confident.some(c => c.number === '7-100-ORD') && !preview.review.some(c => c.number === '7-100-ORD'));
+  check('preview: root row never classified even though its description says "Motor"',
+    !preview.confident.some(c => c.number === 'MACH-01') && !preview.review.some(c => c.number === 'MACH-01'));
+  check('preview: END OF LINE sentinel never classified even though its description says "Seal"',
+    !preview.confident.some(c => c.number === '7-909-00001') && !preview.review.some(c => c.number === '7-909-00001'));
+  check('preview: 7-999-AAA at two BOM positions counted once (dedup)',
+    preview.confident.filter(c => c.number === '7-999-AAA').length === 1);
+  check('preview: matched keyword recorded on each entry',
+    preview.confident.find(c => c.number === '7-999-AAA').keyword === 'motor' &&
+    preview.review.find(c => c.number === '7-234-DDD').keyword === 'dichtung',
+    preview.confident.concat(preview.review).map(c => [c.number, c.keyword]));
+  check('preview: candidate entries carry Row # and parent location',
+    !!preview.confident[0].sourceRow && preview.confident.every(c => 'parentNumber' in c), preview.confident);
+
+  // Cross-checking: an LLDBO file tracking one confident-tier PN (AAA) and
+  // one review-tier PN (CCC) — both should drop out once loaded, proving the
+  // cross-check applies uniformly to both tiers.
+  const candLldboAoa = [
+    ['SR. No', 'PART NO', 'Item Description', 'Specifications', 'Make', 'Qty.', 'Remarks'],
+    ['1', '7-999-AAA', 'tracked motor', 'spec', 'MAKE', '1 Nos.', ''],
+    ['2', '7-234-CCC', 'tracked bracket (review tier, but already tracked anyway)', 'spec', 'MAKE', '1 Nos.', ''],
+  ];
+  const candLldbo = lldboParser.parse({ SheetNames: ['Sheet1'], Sheets: { Sheet1: {} } }, { utils: { sheet_to_json: () => candLldboAoa } });
+
+  const cross = lldboCompare.detectLldboCandidates(candIm, candLldbo, {});
+  check('cross-checked: crossChecked true once an LLDBO file is supplied', cross.crossChecked === true);
+  check('cross-checked: trackedCount = 2 (one confident + one review PN already tracked)', cross.trackedCount === 2, cross.trackedCount);
+  check('cross-checked: confident tier now only BBB (AAA is already tracked)',
+    cross.confident.length === 1 && cross.confident[0].number === '7-999-BBB', cross.confident);
+  check('cross-checked: review tier now only DDD (CCC is already tracked)',
+    cross.review.length === 1 && cross.review[0].number === '7-234-DDD', cross.review);
+
+  // Ignore List support: opts.isIgnored(pn, 'lldboCandidate') suppresses a
+  // candidate and records it in ignoredFindings, mirroring compareRevision()
+  // — reuses js/compare.js's filterIgnoredFlat() directly, same as it does.
+  const candIgnored = lldboCompare.detectLldboCandidates(candIm, null, { isIgnored: (pn, key) => key === 'lldboCandidate' && pn === '7-999-BBB' });
+  check('opts.isIgnored suppresses the matching confident-tier candidate',
+    candIgnored.confident.length === 1 && candIgnored.confident[0].number === '7-999-AAA', candIgnored.confident);
+  check('opts.isIgnored records the suppression in ignoredFindings',
+    candIgnored.ignoredFindings.length === 1 && candIgnored.ignoredFindings[0].checkKey === 'lldboCandidate' &&
+    candIgnored.ignoredFindings[0].number === '7-999-BBB', candIgnored.ignoredFindings);
+  check('opts.isIgnored is only checked against the "lldboCandidate" key',
+    lldboCompare.detectLldboCandidates(candIm, null, { isIgnored: (pn, key) => key === 'missing' }).confident.length === 2);
+  check('without opts.isIgnored, behaves exactly as before (backward compatible)',
+    preview.confident.length === 2 && preview.ignoredFindings.length === 0, preview.ignoredFindings);
+
+  // js/findings.js registry gating: only the confident tier, and only once
+  // crossChecked — the review tier and the uncross-checked preview must
+  // never feed "Parts needing attention".
+  const regCross = findings.buildRegistry({ lldboCandidatesResult: cross });
+  check('findings registry: crossChecked confident candidate becomes the primary finding',
+    regCross.byPn.get('7-999-BBB') && regCross.byPn.get('7-999-BBB').primary.key === 'lldboCandidate',
+    regCross.byPn.get('7-999-BBB'));
+  check('findings registry: review tier never recorded, even when crossChecked',
+    !regCross.byPn.has('7-234-DDD'));
+  const regPreview = findings.buildRegistry({ lldboCandidatesResult: preview });
+  check('findings registry: uncross-checked preview never feeds the registry, even with candidates present',
+    regPreview.parts.length === 0, regPreview.parts);
+}
+
 console.log('\n== synthetic: material normalization (materialsMatch) ==');
 {
   const M = materialCompare.materialsMatch;
@@ -1693,7 +1789,7 @@ console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-o
 
 /* ---------------- real-sample baseline tests ---------------- */
 
-const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath, invBomPath, imBomMatPath, pdf726Path, invBom22819Path, imBom22819Path, imDiffOldPath, imDiffNewPath] = process.argv.slice(2);
+const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath, invBomPath, imBomMatPath, pdf726Path, invBom22819Path, imBom22819Path, imDiffOldPath, imDiffNewPath, imCandPath, lldboCandPath] = process.argv.slice(2);
 let pdfjsLib = null;
 try { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); } catch (e) { /* npm install to enable PDF tests */ }
 
@@ -2190,6 +2286,31 @@ if (imDiffOldPath && imDiffNewPath) {
 
 } else if (imDiffOldPath || imDiffNewPath) {
   console.log('\n(the Item Master diff regression needs both the older and newer Item Master paths)');
+}
+
+if (imCandPath && lldboCandPath) {
+  console.log('\n== real samples: LLDBO candidate detection (SPN016326/PN21902 HSG PRO 200) ==');
+  const candImWb = XLSX.read(fs.readFileSync(imCandPath), { type: 'buffer' });
+  const candIm = detect.parseItemMasterFromWorkbook(candImWb, XLSX);
+  const candLldboWb = XLSX.read(fs.readFileSync(lldboCandPath), { type: 'buffer' });
+  const candLldbo = detect.parseLldboFromWorkbook(candLldboWb, XLSX);
+  check('candidate-sample IM projectKey = SPN016326 / PN21902',
+    candIm.projectKey && candIm.projectKey.spn === 'SPN016326' && candIm.projectKey.pn === 'PN21902', candIm.projectKey);
+
+  const preview = lldboCompare.detectLldboCandidates(candIm, null, {});
+  check('IM-only preview: not cross-checked', preview.crossChecked === false);
+  check('IM-only preview: 70 unique candidates (29 confident + 41 review)',
+    preview.confident.length === 29 && preview.review.length === 41,
+    { confident: preview.confident.length, review: preview.review.length });
+
+  const cross = lldboCompare.detectLldboCandidates(candIm, candLldbo, {});
+  check('cross-checked: 3 already tracked (2 motors + 1 nozzle), 26 confident remain, review tier unaffected',
+    cross.trackedCount === 3 && cross.confident.length === 26 && cross.review.length === 41, cross);
+  check('cross-checked: the two tracked motors and the one tracked nozzle no longer flagged',
+    !cross.confident.some(c => c.number === '7-999-11415') &&
+    !cross.confident.some(c => c.number === '7-999-06562') &&
+    !cross.confident.some(c => c.number === '7-999-07016'),
+    cross.confident.map(c => c.number));
 }
 
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nall tests passed');

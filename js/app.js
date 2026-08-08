@@ -32,7 +32,8 @@
     mappingCtx: null,   // { aoa, indents, source, analysis, fileName }
     folderHandle: null, // FileSystemDirectoryHandle from "Load from folder", if used
     lldbo: null,         // parsed LLDBO result (+ fileName), optional
-    lldboResult: null,   // js/lldbo-compare.js compareLldbo() result
+    lldboResult: null,   // js/lldbo-compare.js compareLldbo() result — null until an LLDBO file is loaded
+    lldboCandidatesResult: null, // js/lldbo-compare.js detectLldboCandidates() result — set as soon as the Item Master loads
     ignoreList: null,    // parsed js/parsers/ignorelist.js result (+ fileName), optional
     materialResult: null, // js/material-compare.js compareMaterial() result
     revisionResult: null, // js/revision-compare.js compareRevision() result
@@ -252,7 +253,7 @@
         }
       } catch (e) {
         if (role === 'cad') renderCadSources('', file.name + ': ' + (e.message || String(e)));
-        else { state.im = null; state.imQc = null; hideImQc(); setImStatus(file.name, [], e.message || String(e)); runMaterialCheck(); runRevisionCheck(); runTitleDescCheck(); }
+        else { state.im = null; state.imQc = null; hideImQc(); setImStatus(file.name, [], e.message || String(e)); runMaterialCheck(); runRevisionCheck(); runTitleDescCheck(); runLldboCheck(); }
       }
     }
     updateCompareButton();
@@ -276,7 +277,7 @@
     setImStatus(file.name, chipsFor(im), '');
     state.imQc = BC.imQc.runChecks(im);
     renderImQc();
-    if (state.lldbo) runLldboCheck();
+    runLldboCheck(); // runs even without an LLDBO file yet — shows candidate parts as a preview
     runMaterialCheck();
     runRevisionCheck();
     runTitleDescCheck();
@@ -362,8 +363,7 @@
       handleLldboWorkbook(file, wb);
     } catch (e) {
       state.lldbo = null;
-      state.lldboResult = null;
-      hideLldboResults();
+      runLldboCheck(); // falls back to the Item-Master-only preview instead of hiding everything
       setLldboStatus(file.name, [], e.message || String(e));
     }
   }
@@ -398,7 +398,7 @@
     if (idx.unrecognized.length) {
       const names = Array.from(new Set(idx.unrecognized.map(function (w) { return '"' + w.from + '"'; }))).join(', ');
       warnEl.textContent = '⚠ ' + idx.unrecognized.length + ' row(s) have an unrecognized "From" value (' + names +
-        ') — not applied. Recognized values: "CAD vs Item compare", "Quantity Mismatch", "Revision", "All".';
+        ') — not applied. Recognized values: "CAD vs Item compare", "Quantity Mismatch", "Revision", "LLDBO Candidate", "All".';
       warnEl.classList.remove('hidden');
     } else {
       warnEl.classList.add('hidden');
@@ -406,14 +406,16 @@
     }
   }
 
-  // The ignore list only takes effect through compareAll() and
-  // compareRevision() (see js/compare.js, js/revision-compare.js and
-  // js/ignorelist-compare.js), so re-applying it after a change means
-  // re-running both, not just re-rendering stale results — the same
-  // runCompare() the "Compare BOMs" button and folder auto-load use, plus
-  // runRevisionCheck() (harmless no-op if no Item Master is loaded yet).
+  // The ignore list only takes effect through compareAll(), compareRevision()
+  // and detectLldboCandidates() (see js/compare.js, js/revision-compare.js,
+  // js/lldbo-compare.js and js/ignorelist-compare.js), so re-applying it
+  // after a change means re-running all three, not just re-rendering stale
+  // results — the same runCompare() the "Compare BOMs" button and folder
+  // auto-load use, plus runRevisionCheck()/runLldboCheck() (harmless no-ops
+  // if no Item Master is loaded yet).
   function applyIgnoreListChange() {
     runRevisionCheck();
+    runLldboCheck();
     if (state.result) runCompare();
     else renderDashboard();
   }
@@ -863,6 +865,7 @@
       titleDescResult: state.titleDescResult,
       virtualResult: state.virtualResult,
       lldboResult: state.lldboResult,
+      lldboCandidatesResult: state.lldboCandidatesResult,
     });
   }
 
@@ -948,7 +951,13 @@
 
     const lld = state.lldboResult;
     if (lld) {
-      const n = lld.missingFromIm.length + lld.qtyMismatches.length;
+      // Confident-tier candidates only count once cross-checked against a
+      // loaded LLDBO file (cand.crossChecked is always true here, since lld
+      // is only non-null once state.lldbo exists too) — the Item-Master-only
+      // preview never contributes to this tile.
+      const cand = state.lldboCandidatesResult;
+      const candMissing = (cand && cand.crossChecked) ? cand.confident.length : 0;
+      const n = lld.missingFromIm.length + lld.qtyMismatches.length + candMissing;
       tiles.push({ num: n, label: 'Long-lead (LLDBO) issues',
         cls: lld.projectKeyMismatch ? 'red' : (n ? 'amber' : 'pass'),
         onClick: function () { jumpTo('lldbo-panel'); } });
@@ -1085,7 +1094,8 @@
     if (!state.ignoreList && !state.ignoreBoughtOutRevision) { sec.classList.add('hidden'); return; }
     sec.classList.remove('hidden');
     const list = ((state.result && state.result.ignoredFindings) || [])
-      .concat((state.revisionResult && state.revisionResult.ignoredFindings) || []);
+      .concat((state.revisionResult && state.revisionResult.ignoredFindings) || [])
+      .concat((state.lldboCandidatesResult && state.lldboCandidatesResult.ignoredFindings) || []);
     $('ignored-findings-count').textContent = list.length + ' SUPPRESSED';
     if (!list.length) {
       body.innerHTML = '<div class="empty-state">' + (state.result || state.revisionResult
@@ -1242,9 +1252,20 @@
     renderDashboard();
   }
 
+  // Unlike compareLldbo() (needs both files), the candidate check below only
+  // needs the Item Master — so this gate is intentionally looser than the
+  // old "both files" one, and state.lldboResult itself may be null while
+  // state.lldboCandidatesResult is populated (Item-Master-only preview).
   function runLldboCheck() {
-    if (!state.lldbo || !state.im) { state.lldboResult = null; hideLldboResults(); return; }
-    state.lldboResult = BC.lldboCompare.compareLldbo(state.lldbo, state.im, BC.indexItemMaster);
+    if (!state.im) {
+      state.lldboResult = null;
+      state.lldboCandidatesResult = null;
+      hideLldboResults();
+      return;
+    }
+    state.lldboResult = state.lldbo ? BC.lldboCompare.compareLldbo(state.lldbo, state.im, BC.indexItemMaster) : null;
+    const ignoreIdx = BC.ignoreListCompare.buildIgnoreIndex(state.ignoreList);
+    state.lldboCandidatesResult = BC.lldboCompare.detectLldboCandidates(state.im, state.lldbo, { isIgnored: ignoreIdx.isIgnored });
     renderLldboPanel();
   }
 
@@ -1324,14 +1345,17 @@
   const LLDBO_MISSING_COLS = [['number', 'Part Number'], ['description', 'Description'], ['qtyText', 'LLDBO Qty'], ['sourceRow', 'LLDBO Row #']];
   const LLDBO_QTY_COLS = [['number', 'Part Number'], ['description', 'Description'], ['lldboQty', 'LLDBO Qty'], ['imQty', 'Item Master Qty'],
     ['sourceRow', 'LLDBO Row #'], ['foundUnder', 'Found Under (Item Master)']];
+  const LLDBO_CANDIDATE_COLS = [['number', 'Part Number'], ['title', 'Title'], ['description', 'Description'], ['keyword', 'Matched Keyword']]
+    .concat(LOCATION_COLS);
 
   function renderLldboPanel() {
-    const res = state.lldboResult;
-    if (!res) { hideLldboResults(); return; }
+    const res = state.lldboResult;             // null until an LLDBO file is also loaded
+    const cand = state.lldboCandidatesResult;   // null only when no Item Master is loaded
+    if (!cand) { hideLldboResults(); return; }
     rebuildFindings(); // rows below are decorated against it
 
     const warnEl = $('lldbo-project-warning');
-    if (res.projectKeyMismatch) {
+    if (res && res.projectKeyMismatch) {
       warnEl.textContent = '⚠ This LLDBO document is for ' + res.projectKeyMismatch.lldbo.pn +
         ' (' + res.projectKeyMismatch.lldbo.spn + ') but the loaded Item Master is for ' +
         res.projectKeyMismatch.im.pn + ' (' + res.projectKeyMismatch.im.spn + ') — are these the right files for the same project?';
@@ -1343,63 +1367,112 @@
 
     const summary = $('lldbo-summary');
     summary.innerHTML = '';
-    summary.appendChild(lldboCardFor('long-lead parts (with Part No)', res.totalLldboItems));
-    summary.appendChild(lldboCardFor('missing from Item Master', res.missingFromIm.length, res.missingFromIm.length ? 'red' : 'pass'));
-    summary.appendChild(lldboCardFor('quantity mismatches', res.qtyMismatches.length, res.qtyMismatches.length ? 'amber' : 'pass'));
-    if (res.noPartNumberCount) {
-      summary.appendChild(lldboCardFor('not yet assigned a Part No', res.noPartNumberCount, 'na'));
+    if (res) {
+      summary.appendChild(lldboCardFor('long-lead parts (with Part No)', res.totalLldboItems));
+      summary.appendChild(lldboCardFor('missing from Item Master', res.missingFromIm.length, res.missingFromIm.length ? 'red' : 'pass'));
+      summary.appendChild(lldboCardFor('quantity mismatches', res.qtyMismatches.length, res.qtyMismatches.length ? 'amber' : 'pass'));
+      if (res.noPartNumberCount) {
+        summary.appendChild(lldboCardFor('not yet assigned a Part No', res.noPartNumberCount, 'na'));
+      }
+    }
+    summary.appendChild(lldboCardFor(
+      cand.crossChecked ? 'candidate long-lead parts missing from LLDBO' : 'candidate long-lead parts found (load LLDBO to verify)',
+      cand.confident.length,
+      cand.crossChecked ? (cand.confident.length ? 'red' : 'pass') : 'na'
+    ));
+    summary.appendChild(lldboCardFor('candidates needing manual review', cand.review.length, cand.review.length ? 'amber' : 'pass'));
+    if (cand.crossChecked && cand.trackedCount) {
+      summary.appendChild(lldboCardFor('candidates already tracked in LLDBO', cand.trackedCount, 'na'));
     }
 
     const sections = $('lldbo-sections');
     sections.innerHTML = '';
+    if (res) {
+      sections.appendChild(lldboSectionFor(
+        'Missing from Item Master',
+        'Long-lead parts released early to procurement that never made it into the Item Master — the part may quietly never get ordered through the normal channel.',
+        LLDBO_MISSING_COLS, res.missingFromIm,
+        '✓ Every long-lead part with a Part No is present in the Item Master.',
+        'lldboMissing'
+      ));
+      sections.appendChild(lldboSectionFor(
+        'Quantity mismatches',
+        'The long-lead quantity (summed across all LLDBO rows for that part) should equal the Item Master\'s rolled-up total.',
+        LLDBO_QTY_COLS, res.qtyMismatches,
+        '✓ Quantities agree for every part found in both.',
+        'lldboQty'
+      ));
+    }
     sections.appendChild(lldboSectionFor(
-      'Missing from Item Master',
-      'Long-lead parts released early to procurement that never made it into the Item Master — the part may quietly never get ordered through the normal channel.',
-      LLDBO_MISSING_COLS, res.missingFromIm,
-      '✓ Every long-lead part with a Part No is present in the Item Master.',
-      'lldboMissing'
+      'Candidate long-lead parts (motors / actuators / seals / nozzles)',
+      cand.crossChecked
+        ? 'Purchased-part-numbered (X-999-*) rows whose Title/Description match a long-lead keyword and are NOT in the loaded LLDBO file — a forgotten long-lead part that may never get ordered.'
+        : 'Purchased-part-numbered (X-999-*) rows whose Title/Description match a long-lead keyword (motor, actuator, seal, gasket, nozzle...). Load an LLDBO file to check which of these are actually missing from it.',
+      LLDBO_CANDIDATE_COLS, cand.confident,
+      cand.crossChecked ? '✓ Every candidate long-lead part is already tracked in the LLDBO file.' : 'No candidate long-lead parts found by keyword in this Item Master.',
+      'lldboCandidate'
     ));
     sections.appendChild(lldboSectionFor(
-      'Quantity mismatches',
-      'The long-lead quantity (summed across all LLDBO rows for that part) should equal the Item Master\'s rolled-up total.',
-      LLDBO_QTY_COLS, res.qtyMismatches,
-      '✓ Quantities agree for every part found in both.',
-      'lldboQty'
+      'Candidate long-lead parts needing manual review',
+      'Keyword matched, but the part number is not in the X-999-* purchased-part convention — could be a genuinely bought part numbered outside convention, or a manufactured part/assembly that merely mentions the keyword. Review individually; not counted as a finding on its own.',
+      LLDBO_CANDIDATE_COLS, cand.review,
+      'No parts need manual review.',
+      null // deliberately no checkKey — a section-open-state id distinct from the confident section, and review-tier rows never claim findings-registry ownership
     ));
     renderDashboard();
   }
 
-  // AOA rows for the LLDBO check export sheet.
-  function lldboSheetRows(res) {
+  // AOA rows for the LLDBO check export sheet. `cand` is present once the
+  // Item Master is loaded; `res` stays null until an LLDBO file also loads.
+  function lldboSheetRows(res, cand) {
     const rows = [['Long-Lead Parts (LLDBO) check', '']];
-    if (res.projectKeyMismatch) {
-      rows.push(['⚠ Project key mismatch', 'LLDBO: ' + res.projectKeyMismatch.lldbo.pn + ' (' + res.projectKeyMismatch.lldbo.spn +
-        ') vs Item Master: ' + res.projectKeyMismatch.im.pn + ' (' + res.projectKeyMismatch.im.spn + ')']);
-    }
-    rows.push([]);
-    rows.push(['Long-lead parts (with Part No)', res.totalLldboItems]);
-    rows.push(['Not yet assigned a Part No', res.noPartNumberCount]);
-    rows.push(['Missing from Item Master', res.missingFromIm.length]);
-    rows.push(['Quantity mismatches', res.qtyMismatches.length]);
-    if (res.missingFromIm.length) {
+    if (res) {
+      if (res.projectKeyMismatch) {
+        rows.push(['⚠ Project key mismatch', 'LLDBO: ' + res.projectKeyMismatch.lldbo.pn + ' (' + res.projectKeyMismatch.lldbo.spn +
+          ') vs Item Master: ' + res.projectKeyMismatch.im.pn + ' (' + res.projectKeyMismatch.im.spn + ')']);
+      }
       rows.push([]);
-      rows.push(['Missing from Item Master', '', '']);
-      rows.push(LLDBO_MISSING_COLS.map(function (c) { return c[1]; }));
-      for (const r of res.missingFromIm) rows.push(LLDBO_MISSING_COLS.map(function (c) { return r[c[0]]; }));
+      rows.push(['Long-lead parts (with Part No)', res.totalLldboItems]);
+      rows.push(['Not yet assigned a Part No', res.noPartNumberCount]);
+      rows.push(['Missing from Item Master', res.missingFromIm.length]);
+      rows.push(['Quantity mismatches', res.qtyMismatches.length]);
+      if (res.missingFromIm.length) {
+        rows.push([]);
+        rows.push(['Missing from Item Master', '', '']);
+        rows.push(LLDBO_MISSING_COLS.map(function (c) { return c[1]; }));
+        for (const r of res.missingFromIm) rows.push(LLDBO_MISSING_COLS.map(function (c) { return r[c[0]]; }));
+      }
+      if (res.qtyMismatches.length) {
+        rows.push([]);
+        rows.push(['Quantity mismatches', '', '', '']);
+        rows.push(LLDBO_QTY_COLS.map(function (c) { return c[1]; }));
+        for (const r of res.qtyMismatches) rows.push(LLDBO_QTY_COLS.map(function (c) { return r[c[0]]; }));
+      }
     }
-    if (res.qtyMismatches.length) {
+    if (cand) {
       rows.push([]);
-      rows.push(['Quantity mismatches', '', '', '']);
-      rows.push(LLDBO_QTY_COLS.map(function (c) { return c[1]; }));
-      for (const r of res.qtyMismatches) rows.push(LLDBO_QTY_COLS.map(function (c) { return r[c[0]]; }));
+      rows.push(['Candidate long-lead parts (motors/actuators/seals/nozzles)',
+        cand.crossChecked ? cand.confident.length + ' missing from LLDBO' : cand.confident.length + ' found — not yet cross-checked against an LLDBO file']);
+      if (cand.confident.length) {
+        rows.push([]);
+        rows.push(LLDBO_CANDIDATE_COLS.map(function (c) { return c[1]; }));
+        for (const r of cand.confident) rows.push(LLDBO_CANDIDATE_COLS.map(function (c) { return r[c[0]]; }));
+      }
+      rows.push([]);
+      rows.push(['Candidates needing manual review (keyword match, non-standard numbering)', cand.review.length]);
+      if (cand.review.length) {
+        rows.push([]);
+        rows.push(LLDBO_CANDIDATE_COLS.map(function (c) { return c[1]; }));
+        for (const r of cand.review) rows.push(LLDBO_CANDIDATE_COLS.map(function (c) { return r[c[0]]; }));
+      }
     }
     return rows;
   }
 
   $('btn-lldbo-export').addEventListener('click', function () {
-    if (!state.lldboResult) return;
+    if (!state.lldboCandidatesResult) return;
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lldboSheetRows(state.lldboResult)), 'LLDBO check');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lldboSheetRows(state.lldboResult, state.lldboCandidatesResult)), 'LLDBO check');
     XLSX.writeFile(wb, 'LLDBO-check' + projectKeySuffix() + '.xlsx');
   });
 
@@ -2738,12 +2811,13 @@
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(virtualSheetRows(state.virtualResult)), 'Virtual parts');
     }
 
-    if (state.lldboResult) {
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lldboSheetRows(state.lldboResult)), 'LLDBO check');
+    if (state.lldboResult || state.lldboCandidatesResult) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lldboSheetRows(state.lldboResult, state.lldboCandidatesResult)), 'LLDBO check');
     }
 
     const allIgnored = (res.ignoredFindings || [])
-      .concat((state.revisionResult && state.revisionResult.ignoredFindings) || []);
+      .concat((state.revisionResult && state.revisionResult.ignoredFindings) || [])
+      .concat((state.lldboCandidatesResult && state.lldboCandidatesResult.ignoredFindings) || []);
     if (allIgnored.length) {
       const ignored = [['Part Number', 'Title', 'Description', 'Would have been flagged as', 'Row #', 'Parent Number', 'Parent Title']];
       for (const r of allIgnored) {
