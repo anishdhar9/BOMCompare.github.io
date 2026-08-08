@@ -64,6 +64,11 @@
     { key: 'qtyCascade', severity: 85, label: 'Quantity cascade (whole subtree released at one ratio)', section: 'results', tab: 'cascade' },
     { key: 'qty', severity: 80, label: 'Quantity mismatch (CAD vs Item Master)', section: 'results', tab: 'qty' },
     { key: 'lldboQty', severity: 75, label: 'Long-lead quantity mismatch', section: 'lldbo-panel' },
+    // Below lldboQty (a confirmed mismatch on an already-tracked part) since
+    // this is a heuristic inference on an untracked part; above the
+    // data-quality checks since an untracked long-lead part risks never
+    // getting ordered, not just a records nit.
+    { key: 'lldboCandidate', severity: 72, label: 'Long-lead candidate (motor/actuator/seal/nozzle) not tracked in LLDBO', section: 'lldbo-panel' },
     { key: 'revision', severity: 70, label: 'Revision mismatch vs CAD', section: 'revision-sections' },
     { key: 'material', severity: 60, label: 'Material mismatch vs CAD', section: 'material-sections' },
     { key: 'titleDesc', severity: 55, label: 'Description mismatch vs CAD', section: 'titledesc-sections' },
@@ -285,6 +290,23 @@
           number: m.number, description: m.description,
           detail: 'LLDBO ' + fmtQty(m.lldboQty) + ' vs Item Master ' + fmtQty(m.imQty),
           sourceRow: m.sourceRow,
+        });
+      }
+    }
+
+    // Only the confident tier, and only once cross-checked against a loaded
+    // LLDBO file — the review tier (keyword match outside the X-999-*
+    // convention) is deliberately never recorded here (needs a human look,
+    // not an automatic finding), and the Item-Master-only preview state
+    // (crossChecked:false) is a "these might need tracking" list, not yet a
+    // confirmed gap, so it must not feed "Parts needing attention" either.
+    const lldCand = sources.lldboCandidatesResult;
+    if (lldCand && lldCand.crossChecked) {
+      for (const c of lldCand.confident || []) {
+        record('lldboCandidate', c.number, {
+          number: c.number, title: c.title, description: c.description,
+          detail: 'Matched keyword "' + c.keyword + '" — purchased-part-numbered (X-999-*), not found in the loaded LLDBO file',
+          sourceRow: c.sourceRow, parentNumber: c.parentNumber, parentTitle: c.parentTitle,
         });
       }
     }

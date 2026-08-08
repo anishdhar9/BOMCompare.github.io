@@ -25,15 +25,36 @@
   }
 
   // "From" text (as written in the Ignore List) -> which of compareAll()'s
-  // check keys it suppresses. Only the CAD-vs-Item-Master comparison keys
-  // are covered today, since that's the only category seen in real Ignore
-  // List files so far — Item Master QC / Material / Revision / Description
-  // checks aren't wired to the ignore list yet. Add a new category here (and
-  // to the recognized-values text in app.js's warning message) if a "From"
-  // value for one of those is needed later.
+  // check keys it suppresses. "cad vs item compare" is the broad, catch-all
+  // category (covers all four); "quantity mismatch" is a narrower one for a
+  // part that should still be flagged if genuinely missing/reference/
+  // in-Item-Master-only, but has an accepted, known quantity discrepancy
+  // that shouldn't keep getting reported; "revision" suppresses a part from
+  // the Revision: CAD vs Item Master check (js/revision-compare.js, a
+  // separate module from compareAll() but filtered the same way); "lldbo
+  // candidate" suppresses a part from the LLDBO-candidate check
+  // (js/lldbo-compare.js's detectLldboCandidates(), also a separate module,
+  // both confidence tiers) — for a keyword hit someone has confirmed is not
+  // actually a long-lead part; "all" (below) is broader still — literally
+  // everything the ignore list currently knows how to suppress. These are
+  // independent — a part can be listed under any one or combination. Item
+  // Master QC / Material / Description checks aren't wired to the ignore
+  // list yet. Add a new category here (and to the recognized-values text in
+  // app.js's warning message) if a "From" value for one of those is needed
+  // later — "all" picks it up automatically.
   const CATEGORIES = {
     'cad vs item compare': ['missing', 'reference', 'qty', 'imOnly'],
+    'quantity mismatch': ['qty'],
+    'revision': ['revision'],
+    'lldbo candidate': ['lldboCandidate'],
   };
+  // "All" suppresses everything the ignore list can currently suppress for a
+  // part — the union of every category above, computed rather than
+  // hardcoded so it can never drift out of sync if a category is added.
+  CATEGORIES.all = Array.from(Object.keys(CATEGORIES).reduce(function (set, cat) {
+    for (const k of CATEGORIES[cat]) set.add(k);
+    return set;
+  }, new Set()));
 
   // Returns { isIgnored(pn, checkKey), byPn: Map<PN, Set<checkKey>>, unrecognized:[{number, from, sourceRow}] }.
   function buildIgnoreIndex(ignoreList) {
