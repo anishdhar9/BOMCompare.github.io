@@ -270,6 +270,7 @@ tr.row-ref .num-cell { color: var(--amber-text); font-weight: 700; }
 tr.row-child { background: var(--muted-row); color: var(--muted); }
 tr.row-child .num-cell { font-weight: 400; }
 tr.row-qty { background: var(--amber-bg); }
+tr.row-revision-behind { background: var(--amber-bg); }
 tr.row-cascade { background: var(--red-bg); }
 tr.row-cascade .num-cell { color: var(--red-text); font-weight: 700; }
 tr.hidden-row { display: none; }
