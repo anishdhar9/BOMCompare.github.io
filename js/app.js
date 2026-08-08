@@ -1283,7 +1283,9 @@
   // `traceable` (optional): adds a trace toggle to the Part Number cell (cols
   // must include a 'number' entry) revealing full cross-source provenance —
   // opt-in per call site, not every list built from this function needs it.
-  function lldboSectionFor(title, desc, cols, fail, emptyText, checkKey, traceable) {
+  // `rowClassFor` (optional): (row) -> className|falsy, applied to each <tr>
+  // — e.g. the Revision section's amber "Item Master behind CAD" tint.
+  function lldboSectionFor(title, desc, cols, fail, emptyText, checkKey, traceable, rowClassFor) {
     const box = document.createElement('div');
     box.className = 'qc-section';
     const head = document.createElement('div');
@@ -1312,6 +1314,10 @@
       table.appendChild(htr);
       for (const row of fail) {
         const tr = document.createElement('tr');
+        if (rowClassFor) {
+          const cls = rowClassFor(row);
+          if (cls) tr.className = cls;
+        }
         for (const col of cols) {
           if (traceable && col[0] === 'number') {
             const td = document.createElement('td');
@@ -1634,7 +1640,7 @@
   }
 
   const REVISION_MISMATCH_COLS = [['number', 'Part Number'], ['title', 'Title']].concat(LOCATION_COLS).concat(
-    [['imRevision', 'Item Master Revision'], ['cadRevision', 'CAD Revision']]);
+    [['imRevision', 'Item Master Revision'], ['cadRevision', 'CAD Revision'], ['staleDesign', 'Stale Design?']]);
 
   // Quick in-session toggle for bought-out/purchased parts (X-999-*, see
   // js/imqc.js's PURCHASED_PART_RE) — these often carry a vendor's own
@@ -1668,10 +1674,12 @@
       sections.appendChild(lldboSectionFor(
         'Revision: CAD vs Item Master',
         'Compares CAD revision (' + (res.cadSourceFileName ? '"' + res.cadSourceFileName + '"' : 'the loaded CAD source') +
-          ') against the Item Master, for every shared part. Revision values are compared directly (not normalized) — any difference is a genuine finding.',
+          ') against the Item Master, for every shared part. Revision values are compared directly (not normalized) — any difference is a genuine finding. ' +
+          'Rows shaded amber have an Item Master revision older than CAD\'s — the design may have moved on since this part was released. Only asserted when both sides are plain numbers; purchased-part placeholder text (e.g. "ANY"/"NONE") is never guessed at.',
         REVISION_MISMATCH_COLS, res.mismatches,
         '✓ CAD and Item Master revisions agree for every shared part.',
-        'revision'
+        'revision', false,
+        function (row) { return row.imBehindCad ? 'row-revision-behind' : null; }
       ));
     } else {
       const note = document.createElement('div');

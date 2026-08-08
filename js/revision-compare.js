@@ -4,15 +4,19 @@
  *
  * Not every CAD source carries revision: it's optional/user-configurable in
  * Vault exports, the same situation as material (see material-compare.js) —
- * this check uses whichever loaded CAD source actually has revision data
- * (`hasRevision`), and is only applicable when at least one does and the
+ * this check merges revision data across every loaded CAD source that has
+ * it (`hasRevision`), and is only applicable when at least one does and the
  * Item Master itself has a Revision column.
  *
  * Unlike material, there's no naming-convention ambiguity to normalize away
- * — revisions are simple short codes (verified on a real Vault "Uses" PDF
- * export: plain integers "0", "1", "2"...; other organizations may use
- * letters "A"/"B") — so this is a direct value comparison (trimmed,
- * case-insensitive), not a grade-equivalence lookup like material's.
+ * — revisions are simple short codes (verified on real Vault/Inventor
+ * exports: plain integers "0".."8" on the Item Master side; other
+ * organizations may use letters "A"/"B") — so this is a direct value
+ * comparison (trimmed, case-insensitive), not a grade-equivalence lookup
+ * like material's. The CAD side is sparser and also carries Inventor
+ * Content-Center placeholder text on purchased parts ("ANY"/"NONE"/"-",
+ * stable per-part metadata, not noise) — compareRevisionOrder() below
+ * never attempts to order that, only clean integers.
  *
  * Pure logic (no DOM).
  */
@@ -36,14 +40,40 @@
     return na === nb;
   }
 
-  // Picks the first loaded CAD source that actually carries revision data
-  // and a lookup of its first-seen revision per PN. Mirrors
-  // material-compare.js's cadMaterialByPn.
+  // Real Vault/Inventor exports show two very different kinds of revision
+  // value on the CAD side: a genuine plain integer, or Inventor Content-
+  // Center placeholder text on purchased parts ("ANY", "NONE", "-" — stable
+  // per-part metadata, not noise, verified recurring identically for the
+  // same PN across independent assemblies). Ordering is only ever asserted
+  // between two clean non-negative integers; anything else returns null
+  // rather than guess — this is what keeps placeholder text from ever being
+  // mis-classified as "older" or "newer".
+  function isCleanRevision(v) {
+    return /^\d+$/.test(normRevision(v));
+  }
+
+  function compareRevisionOrder(a, b) {
+    if (!isCleanRevision(a) || !isCleanRevision(b)) return null;
+    var ia = parseInt(normRevision(a), 10), ib = parseInt(normRevision(b), 10);
+    return ia < ib ? -1 : (ia > ib ? 1 : 0);
+  }
+
+  // Merges revision data across EVERY loaded CAD source with hasRevision,
+  // not just the first one that has any — a single sparse source (e.g. an
+  // Inventor export whose REV column is only populated on a couple percent
+  // of items) used to silently win over a more complete one just by being
+  // checked first. For a given PN, the first value found is kept unless it's
+  // not a clean comparable integer (see compareRevisionOrder) and a later
+  // source has one — then it's upgraded. Two sources reporting two
+  // DIFFERENT comparable revisions for the same PN is left as first-found-
+  // wins; that's a genuine CAD-source inconsistency worth its own check
+  // some day, not something to silently resolve here.
   function cadRevisionByPn(cadSources) {
+    var map = new Map();
+    var contributing = [];
     for (var i = 0; i < cadSources.length; i++) {
       var src = cadSources[i];
       if (!src.hasRevision) continue;
-      var map = new Map();
       var any = false;
       for (var j = 0; j < src.items.length; j++) {
         var it = src.items[j];
@@ -51,11 +81,14 @@
         var rev = (it.revision || '').trim();
         if (!pn || !rev) continue;
         any = true;
-        if (!map.has(pn)) map.set(pn, rev);
+        var existing = map.get(pn);
+        if (!existing || (!isCleanRevision(existing) && isCleanRevision(rev))) {
+          map.set(pn, rev);
+        }
       }
-      if (any) return { source: src, byPn: map };
+      if (any) contributing.push(src);
     }
-    return null;
+    return map.size ? { sources: contributing, byPn: map } : null;
   }
 
   // cadSources: the array passed to compareAll (0-2 CAD sources).
@@ -86,11 +119,20 @@
       if (!revisionsMatch(row.revision, cadRev)) {
         seenPn.add(pnKey);
         var parent = imQc.parentOf(pathIndex, row);
+        // imBehindCad: the design has moved on in CAD past what's recorded
+        // in the released Item Master — only ever asserted when both sides
+        // are clean integers (see compareRevisionOrder), never guessed at
+        // for placeholder text like "ANY"/"NONE". staleDesign is a ready-
+        // to-display label so the on-screen table and the export sheet
+        // (which share the same column list) both get it for free.
+        var behind = compareRevisionOrder(row.revision, cadRev) === -1;
         mismatches.push({
           number: row.number,
           title: row.title,
           imRevision: row.revision,
           cadRevision: cadRev,
+          imBehindCad: behind,
+          staleDesign: behind ? 'Yes — CAD is newer' : '',
           sourceRow: row.sourceRow,
           parentNumber: parent ? parent.number : '',
           parentTitle: parent ? parent.title : '',
@@ -102,7 +144,7 @@
 
     return {
       applicable: true,
-      cadSourceFileName: cad.source.fileName || '',
+      cadSourceFileName: cad.sources.map(function (s) { return s.fileName || ''; }).filter(Boolean).join(', '),
       mismatches: mismatches,
       ignoredFindings: ignoredFindings,
     };
@@ -112,6 +154,7 @@
     revisionCompare: {
       compareRevision: compareRevision,
       revisionsMatch: revisionsMatch,
+      compareRevisionOrder: compareRevisionOrder,
     },
   };
 });
