@@ -1263,6 +1263,96 @@ console.log('\n== synthetic: Revision Consistency (c7) + Revision: CAD vs Item M
     revBoughtOut.mismatches.length === 0 && revBoughtOut.ignoredFindings.length === 1, revBoughtOut);
   check('same bought-out part, toggle off (no isIgnored), is reported normally',
     revisionCompare.compareRevision([boughtOutCad], boughtOutIm).mismatches.length === 1);
+
+  // compareRevisionOrder: only ever asserted between two clean non-negative
+  // integers — never guesses at placeholder text (Inventor Content-Center
+  // defaults like "ANY"/"NONE" on purchased parts, verified real values).
+  const CRO = revisionCompare.compareRevisionOrder;
+  check('compareRevisionOrder: 3 < 9 -> -1', CRO('3', '9') === -1);
+  check('compareRevisionOrder: 9 > 3 -> 1', CRO('9', '3') === 1);
+  check('compareRevisionOrder: equal -> 0', CRO('4', '4') === 0);
+  check('compareRevisionOrder: double-digit compares numerically, not lexicographically', CRO('10', '2') === 1);
+  check('compareRevisionOrder: placeholder text on either side -> null',
+    CRO('ANY', '3') === null && CRO('3', 'NONE') === null && CRO('-', '-') === null);
+  check('compareRevisionOrder: blank on either side -> null', CRO('', '3') === null && CRO('3', '') === null);
+
+  // rev.mismatches[0] is PART-Y: IM '3' vs CAD '9' -- IM is genuinely behind.
+  check('imBehindCad set true when Item Master revision is numerically lower than CAD\'s',
+    rev.mismatches[0].imBehindCad === true && rev.mismatches[0].staleDesign === 'Yes — CAD is newer', rev.mismatches[0]);
+
+  // Opposite direction (IM ahead of CAD) and a non-comparable mismatch
+  // (placeholder CAD text) must both stay unflagged -- this is the shape
+  // most real mismatches actually take (verified: 8 of 11 real mismatches
+  // found in this org's sample data are exactly the placeholder-text case).
+  const orderIm = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: {
+      sheet_to_json: () => [
+        ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Revision'],
+        ['MACH-01', '-', 'Machine', 'desc', '1'],
+        ['PART-AHEAD', '1', 'IM ahead of CAD', 'desc', '5'],
+        ['PART-NA', '2', 'CAD side not comparable', 'desc', '2'],
+      ],
+    },
+  });
+  const orderCad = {
+    kind: 'cad', hasRevision: true, fileName: 'inventor.xlsx',
+    items: [
+      { number: 'PART-AHEAD', revision: '2' },  // IM '5' > CAD '2'
+      { number: 'PART-NA', revision: 'ANY' },   // placeholder text, not comparable
+    ],
+  };
+  const orderRes = revisionCompare.compareRevision([orderCad], orderIm);
+  check('IM ahead of CAD: mismatch flagged but imBehindCad is false',
+    orderRes.mismatches.find(m => m.number === 'PART-AHEAD').imBehindCad === false,
+    orderRes.mismatches.find(m => m.number === 'PART-AHEAD'));
+  check('non-comparable (placeholder CAD text): mismatch flagged but imBehindCad is false',
+    orderRes.mismatches.find(m => m.number === 'PART-NA').imBehindCad === false &&
+    orderRes.mismatches.find(m => m.number === 'PART-NA').staleDesign === '',
+    orderRes.mismatches.find(m => m.number === 'PART-NA'));
+
+  // cadRevisionByPn multi-source merge: a sparse/placeholder-only first
+  // source must not shadow a genuinely comparable value on a second source.
+  const sparseFirst = {
+    kind: 'cad', hasRevision: true, fileName: 'sparse-first.xlsx',
+    items: [{ number: 'PART-MERGE', revision: 'NONE' }],
+  };
+  const cleanSecond = {
+    kind: 'cad', hasRevision: true, fileName: 'clean-second.xlsx',
+    items: [{ number: 'PART-MERGE', revision: '7' }],
+  };
+  const mergeIm = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => [
+      ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Revision'],
+      ['MACH-01', '-', 'Machine', 'desc', '1'],
+      ['PART-MERGE', '1', 'Merged across sources', 'desc', '3'],
+    ] },
+  });
+  const mergedRes = revisionCompare.compareRevision([sparseFirst, cleanSecond], mergeIm);
+  check('multi-source merge: placeholder-only first source upgraded by a comparable second source (IM 3 < merged CAD 7 -> genuinely stale)',
+    mergedRes.mismatches.length === 1 && mergedRes.mismatches[0].cadRevision === '7' && mergedRes.mismatches[0].imBehindCad === true,
+    mergedRes.mismatches);
+  check('multi-source merge: cadSourceFileName reports every contributing source',
+    mergedRes.cadSourceFileName === 'sparse-first.xlsx, clean-second.xlsx', mergedRes.cadSourceFileName);
+
+  // A source that already has a comparable value first is NOT overridden by
+  // a second source (first-comparable-wins, not last-wins).
+  const cleanFirst = { kind: 'cad', hasRevision: true, fileName: 'clean-first.xlsx', items: [{ number: 'PART-MERGE2', revision: '1' }] };
+  const otherSecond = { kind: 'cad', hasRevision: true, fileName: 'other-second.xlsx', items: [{ number: 'PART-MERGE2', revision: '9' }] };
+  const mergeIm2 = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => [
+      ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Revision'],
+      ['MACH-01', '-', 'Machine', 'desc', '1'],
+      ['PART-MERGE2', '1', 'First comparable value wins', 'desc', '1'],
+    ] },
+  });
+  const mergedRes2 = revisionCompare.compareRevision([cleanFirst, otherSecond], mergeIm2);
+  check('multi-source merge: first comparable value is not overridden by a later source',
+    mergedRes2.mismatches.length === 0, mergedRes2.mismatches);
+
+  // Single-source case is unchanged (existing tested behavior): cadSourceFileName
+  // is just that one file's name, no join artifacts.
+  check('single CAD source: cadSourceFileName has no comma/join artifact',
+    rev.cadSourceFileName === 'inventor.xlsx', rev.cadSourceFileName);
 }
 
 console.log('\n== synthetic: sketch parts in Item Master (c8) + item state (c9) ==');
@@ -1789,7 +1879,7 @@ console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-o
 
 /* ---------------- real-sample baseline tests ---------------- */
 
-const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath, invBomPath, imBomMatPath, pdf726Path, invBom22819Path, imBom22819Path, imDiffOldPath, imDiffNewPath, imCandPath, lldboCandPath] = process.argv.slice(2);
+const [cadPath, imPath, pdf723Path, pdf732Path, inv732Path, pdf733Path, im733Path, lldboPath, invBomPath, imBomMatPath, pdf726Path, invBom22819Path, imBom22819Path, imDiffOldPath, imDiffNewPath, imCandPath, lldboCandPath, imRev498Path, invBom498Path] = process.argv.slice(2);
 let pdfjsLib = null;
 try { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); } catch (e) { /* npm install to enable PDF tests */ }
 
@@ -2311,6 +2401,33 @@ if (imCandPath && lldboCandPath) {
     !cross.confident.some(c => c.number === '7-999-06562') &&
     !cross.confident.some(c => c.number === '7-999-07016'),
     cross.confident.map(c => c.number));
+}
+
+if (imRev498Path && invBom498Path) {
+  console.log('\n== real samples: revision ordering (723020498) — no false positives ==');
+  // This assembly's real revision mismatches were fully catalogued before
+  // building the ordering check: 3 comparable (integer-vs-integer) — all 3
+  // go the OPPOSITE direction (Item Master ahead of CAD) — plus several
+  // non-comparable ones where the CAD side is Inventor Content-Center
+  // placeholder text ("ANY"/"NONE"/"-"), never a real revision. None of the
+  // 498 assembly's real mismatches should ever be marked imBehindCad.
+  const im498 = detect.parseItemMasterFromWorkbook(XLSX.read(fs.readFileSync(imRev498Path), { type: 'buffer' }), XLSX);
+  const invWb498 = XLSX.read(fs.readFileSync(invBom498Path), { type: 'buffer' });
+  const invRes498 = detect.parseCadFromWorkbook(invWb498, XLSX);
+  const invCad498 = invRes498 && invRes498.ok;
+  check('723020498 Inventor BOM parsed', !!invCad498, invRes498);
+
+  const rev498 = revisionCompare.compareRevision([invCad498], im498);
+  check('723020498 revision check applicable', rev498.applicable === true, rev498);
+  check('723020498: known integer-vs-integer mismatch 7-237-20065 (IM 2 > CAD 1) is NOT marked stale',
+    !rev498.mismatches.some(m => m.number === '7-237-20065' && m.imBehindCad === true),
+    rev498.mismatches.find(m => m.number === '7-237-20065'));
+  check('723020498: no mismatch anywhere in this real sample is marked imBehindCad (documented: none exist in this data)',
+    !rev498.mismatches.some(m => m.imBehindCad === true),
+    rev498.mismatches.filter(m => m.imBehindCad).map(m => m.number));
+  check('723020498: placeholder-text mismatches (e.g. CAD "ANY"/"NONE") stay non-stale, not crash',
+    rev498.mismatches.filter(m => !/^\d+$/.test(m.cadRevision)).every(m => m.imBehindCad === false),
+    rev498.mismatches.filter(m => !/^\d+$/.test(m.cadRevision)));
 }
 
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nall tests passed');
