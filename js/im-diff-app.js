@@ -218,8 +218,12 @@
 
   /* ----- ECR sheet ----- */
 
+  function ecrOptions() {
+    return { cascadeIntoNewSubtrees: $('ecr-cascade').checked };
+  }
+
   function renderEcrSummary() {
-    state.ecr = BC.ecrFill.diffForEcr(state.old, state.new, BC.indexItemMaster);
+    state.ecr = BC.ecrFill.diffForEcr(state.old, state.new, BC.indexItemMaster, ecrOptions());
     const summary = $('ecr-summary');
     summary.innerHTML = '';
     const cards = [
@@ -249,16 +253,20 @@
     }
   }
 
+  $('ecr-cascade').addEventListener('change', function () {
+    if (state.diff) renderEcrSummary();
+  });
+
   $('btn-ecr-export').addEventListener('click', function () {
     $('ecr-error').textContent = '';
     try {
-      if (!state.ecr) renderEcrSummary();
+      renderEcrSummary();
       if (!state.ecr.rows.length) {
         $('ecr-error').textContent = 'Nothing to generate: no Added, Removed, Quantity, or Revision changes were found.';
         return;
       }
       const templateWb = XLSX.read(BC.ECR_TEMPLATE_BASE64, { type: 'base64' });
-      BC.ecrFill.fillEcrTemplate(templateWb, state.ecr.rows, XLSX);
+      BC.ecrFill.fillEcrTemplate(templateWb, state.ecr.rows, XLSX, state.new.projectKey);
       const oldName = (state.old.fileName || 'old').replace(/\.[^.]+$/, '');
       const newName = (state.new.fileName || 'new').replace(/\.[^.]+$/, '');
       XLSX.writeFile(templateWb, 'ECR_' + oldName + '_vs_' + newName + '.xlsx');

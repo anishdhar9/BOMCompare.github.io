@@ -205,69 +205,104 @@ console.log('\n== synthetic: Item Master diff (diffItemMasters) ==');
 
 console.log('\n== synthetic: ECR sheet generation (diffForEcr / fillEcrTemplate) ==');
 {
-  const header = ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity', 'Revision', 'Material', 'State'];
+  // Tree: MACH-01 (root, unchanged) -> ASSY-1 (revision bump 0->1) -> a
+  // removed part, a qty-changed part, a material-only part, an unchanged
+  // part, and a wholly new assembly (PART-ADDED-ASSY) with its own nested
+  // child (PART-ADDED-CHILD); plus PARENT-A/PARENT-B, two SIBLINGS of
+  // ASSY-1 that both use the SAME part number (SHARED-PART) but only the
+  // occurrence under PARENT-B actually changes quantity — this is the
+  // position-aware-matching regression case (a flat "first occurrence of
+  // this PN anywhere" diff gets this wrong).
+  const header = [
+    'Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity', 'Revision', 'Material', 'State',
+    'Producer', 'Producer Number',
+  ];
   const imOldAoa = [
     header,
-    ['MACH-01', '-', 'Machine', 'desc', '-', '0', '', 'Certified'],
-    ['ASSY-1', '1', 'Assembly One', 'desc', '1 Each', '0', '', 'Certified'],
-    ['PART-REMOVED', '1.1', 'Removed Part', 'desc', '2 Each', '0', 'AISI 304', 'Certified'],
-    ['PART-REVBUMP', '1.2', 'Rev Bump Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
-    ['PART-QTYCHANGE', '1.3', 'Qty Change Part', 'desc', '2 Each', '0', 'AISI 304', 'Certified'],
-    ['PART-MATONLY', '1.4', 'Mat Only Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
-    ['PART-SAME', '1.5', 'Same Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+    ['MACH-01', '-', 'Machine', 'desc', '-', '0', '', 'Certified', 'SPN99999', '12345'],
+    ['ASSY-1', '1', 'Assembly One', 'desc', '1 Each', '0', '', 'Certified', '', ''],
+    ['PART-REMOVED', '1.1', 'Removed Part', 'desc', '2 Each', '0', 'AISI 304', 'Certified', '', ''],
+    ['PART-QTYCHANGE', '1.2', 'Qty Change Part', 'desc', '2 Each', '0', 'AISI 304', 'Certified', '', ''],
+    ['PART-MATONLY', '1.3', 'Mat Only Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified', '', ''],
+    ['PART-SAME', '1.4', 'Same Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified', '', ''],
+    ['PARENT-A', '2', 'Parent A', 'desc', '1 Each', '0', '', 'Certified', '', ''],
+    ['SHARED-PART', '2.1', 'Shared Part', 'desc', '3 Each', '0', 'AISI 304', 'Certified', '', ''],
+    ['PARENT-B', '3', 'Parent B', 'desc', '1 Each', '0', '', 'Certified', '', ''],
+    ['SHARED-PART', '3.1', 'Shared Part', 'desc', '5 Each', '0', 'AISI 304', 'Certified', '', ''],
   ];
   const imNewAoa = [
     header,
-    ['MACH-01', '-', 'Machine', 'desc', '-', '0', '', 'Certified'],
-    ['ASSY-1', '1', 'Assembly One', 'desc', '1 Each', '0', '', 'Certified'],
-    ['PART-ADDED', '1.1', 'Added Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
-    ['PART-REVBUMP', '1.2', 'Rev Bump Part', 'desc', '1 Each', '1', 'AISI 304', 'Certified'],
-    ['PART-QTYCHANGE', '1.3', 'Qty Change Part', 'desc', '4 Each', '0', 'AISI 304', 'Certified'],
-    ['PART-MATONLY', '1.4', 'Mat Only Part', 'desc', '1 Each', '0', 'AISI 316', 'Certified'],
-    ['PART-SAME', '1.5', 'Same Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+    ['MACH-01', '-', 'Machine', 'desc', '-', '0', '', 'Certified', 'SPN99999', '12345'],
+    ['ASSY-1', '1', 'Assembly One', 'desc', '1 Each', '1', '', 'Certified', '', ''],
+    ['PART-QTYCHANGE', '1.1', 'Qty Change Part', 'desc', '4 Each', '0', 'AISI 304', 'Certified', '', ''],
+    ['PART-MATONLY', '1.2', 'Mat Only Part', 'desc', '1 Each', '0', 'AISI 316', 'Certified', '', ''],
+    ['PART-SAME', '1.3', 'Same Part', 'desc', '1 Each', '0', 'AISI 304', 'Certified', '', ''],
+    ['PART-ADDED-ASSY', '1.4', 'Added Assembly', 'desc', '1 Each', '0', 'AISI 304', 'Certified', '', ''],
+    ['PART-ADDED-CHILD', '1.4.1', 'Added Child', 'desc', '2 Each', '0', 'AISI 304', 'Certified', '', ''],
+    ['PARENT-A', '2', 'Parent A', 'desc', '1 Each', '0', '', 'Certified', '', ''],
+    ['SHARED-PART', '2.1', 'Shared Part', 'desc', '3 Each', '0', 'AISI 304', 'Certified', '', ''],
+    ['PARENT-B', '3', 'Parent B', 'desc', '1 Each', '0', '', 'Certified', '', ''],
+    ['SHARED-PART', '3.1', 'Shared Part', 'desc', '7 Each', '0', 'AISI 304', 'Certified', '', ''],
   ];
   const parseEcr = (aoa) => itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, { utils: { sheet_to_json: () => aoa } });
   const imOld = parseEcr(imOldAoa);
   const imNew = parseEcr(imNewAoa);
 
-  check('padRevision pads single digits, passes through multi-digit and letters',
-    ecrFill.padRevision('2') === '02' && ecrFill.padRevision('10') === '10' &&
-    ecrFill.padRevision('') === '00' && ecrFill.padRevision('A') === 'A');
-
   const ecr = ecrFill.diffForEcr(imOld, imNew, indexItemMaster);
-  check('5 ECR rows: removed + added + 2 for the revision bump + qty changed',
-    ecr.rows.length === 5, ecr.rows.map(r => r.itemNoWithRev + ':' + r.action));
-  check('PART-MATONLY and PART-SAME never become ECR rows',
-    !ecr.rows.some(r => /PART-MATONLY|PART-SAME/.test(r.itemNoWithRev)), ecr.rows.map(r => r.itemNoWithRev));
+  check('7 ECR rows (default cascadeIntoNewSubtrees: true): revision-bump pair, qty changed, ' +
+    'added assembly + its nested child, removed part, and the ONE occurrence of SHARED-PART that actually changed',
+    ecr.rows.length === 7, ecr.rows.map(r => r.itemNoWithRev + ':' + r.action));
 
-  const removedRow = ecr.rows.find(r => r.itemNoWithRev === 'PART-REMOVED-00');
-  check('removed row: Old 2 Each -> New 0, Action Part Deleted, parent ASSY-1-00',
-    !!removedRow && removedRow.oldQty === '2 Each' && removedRow.newQty === '0' &&
-    removedRow.action === 'Part Deleted' && removedRow.subAssyNumberWithRev === 'ASSY-1-00', removedRow);
+  check('revision bump: Revised row (new rev, 0->1) comes BEFORE Obsolete row (old rev, 1->0), ' +
+    'both under the parent\'s NEW-side composite MACH-01-0 (not the old side)',
+    ecr.rows[0].itemNoWithRev === 'ASSY-1-1' && ecr.rows[0].action === 'Drg. Revised' &&
+    ecr.rows[0].oldQty === 0 && ecr.rows[0].newQty === 1 && ecr.rows[0].subAssyNumberWithRev === 'MACH-01-0' &&
+    ecr.rows[1].itemNoWithRev === 'ASSY-1-0' && ecr.rows[1].action === 'Drg. Obsolete' &&
+    ecr.rows[1].oldQty === 1 && ecr.rows[1].newQty === 0 && ecr.rows[1].subAssyNumberWithRev === 'MACH-01-0',
+    ecr.rows.slice(0, 2));
 
-  const addedRow = ecr.rows.find(r => r.itemNoWithRev === 'PART-ADDED-00');
-  check('added row: Old 0 -> New 1 Each, Action Part Added',
-    !!addedRow && addedRow.oldQty === '0' && addedRow.newQty === '1 Each' && addedRow.action === 'Part Added', addedRow);
+  const qtyRow = ecr.rows.find(r => r.action === 'Qty Changed' && r.subAssyNumberWithRev === 'ASSY-1-1');
+  check('qty-only change under the (now-revised) parent: bare item number (no revision suffix), numeric 2 -> 4',
+    !!qtyRow && qtyRow.itemNoWithRev === 'PART-QTYCHANGE' && qtyRow.oldQty === 2 && qtyRow.newQty === 4, qtyRow);
 
-  const obsoleteRow = ecr.rows.find(r => r.itemNoWithRev === 'PART-REVBUMP-00' && r.action === 'Drg. Obsolete');
-  const revisedRow = ecr.rows.find(r => r.itemNoWithRev === 'PART-REVBUMP-01' && r.action === 'Drg. Revised');
-  check('revision bump produces an Obsolete row (old rev, qty->0) and a Revised row (new rev, 0->qty)',
-    !!obsoleteRow && obsoleteRow.oldQty === '1 Each' && obsoleteRow.newQty === '0' &&
-    !!revisedRow && revisedRow.oldQty === '0' && revisedRow.newQty === '1 Each', { obsoleteRow, revisedRow });
+  const addedAssyRow = ecr.rows.find(r => r.action === 'Part Added' && r.itemNoWithRev === 'PART-ADDED-ASSY');
+  check('added assembly: bare item number, parent ASSY-1-1, Old 0 -> New 1 (numeric)',
+    !!addedAssyRow && addedAssyRow.subAssyNumberWithRev === 'ASSY-1-1' &&
+    addedAssyRow.oldQty === 0 && addedAssyRow.newQty === 1, addedAssyRow);
 
-  const qtyRow = ecr.rows.find(r => r.itemNoWithRev === 'PART-QTYCHANGE-00');
-  check('qty-only change: Action "Qty Changed", Old 2 Each -> New 4 Each, revision suffix unchanged',
-    !!qtyRow && qtyRow.oldQty === '2 Each' && qtyRow.newQty === '4 Each' && qtyRow.action === 'Qty Changed', qtyRow);
+  const addedChildRow = ecr.rows.find(r => r.itemNoWithRev === 'PART-ADDED-CHILD');
+  check('cascade into a wholly new subtree: nested child gets its own Part Added row, ' +
+    'parented to the new assembly\'s OWN revisioned composite (PART-ADDED-ASSY-0)',
+    !!addedChildRow && addedChildRow.action === 'Part Added' &&
+    addedChildRow.subAssyNumberWithRev === 'PART-ADDED-ASSY-0' && addedChildRow.newQty === 2, addedChildRow);
 
-  check('material-only change is reported as an "other change", not an ECR row',
+  const removedRow = ecr.rows.find(r => r.action === 'Part Deleted');
+  check('removed row: bare item number, parent ASSY-1-1 (still exists in the new tree), Old 2 -> New 0',
+    !!removedRow && removedRow.itemNoWithRev === 'PART-REMOVED' &&
+    removedRow.subAssyNumberWithRev === 'ASSY-1-1' && removedRow.oldQty === 2 && removedRow.newQty === 0, removedRow);
+
+  const sharedRows = ecr.rows.filter(r => r.itemNoWithRev === 'SHARED-PART');
+  check('multi-occurrence: SHARED-PART changes ONLY under PARENT-B (5->7) — the unchanged occurrence under ' +
+    'PARENT-A produces no row at all, not a false positive or a merged/first-occurrence result',
+    sharedRows.length === 1 && sharedRows[0].subAssyNumberWithRev === 'PARENT-B-0' &&
+    sharedRows[0].oldQty === 5 && sharedRows[0].newQty === 7, sharedRows);
+
+  check('material-only change (PART-MATONLY) is reported as an "other change", not an ECR row; ' +
+    'PART-SAME never appears anywhere',
     ecr.otherChanges.length === 1 && ecr.otherChanges[0].number === 'PART-MATONLY' &&
-    ecr.otherChanges[0].fields.includes('Material'), ecr.otherChanges);
+    ecr.otherChanges[0].fields.includes('Material') &&
+    !ecr.rows.some(r => r.itemNoWithRev === 'PART-SAME'), ecr.otherChanges);
+
+  const ecrNoCascade = ecrFill.diffForEcr(imOld, imNew, indexItemMaster, { cascadeIntoNewSubtrees: false });
+  check('cascadeIntoNewSubtrees: false collapses the new assembly to ONE row — its nested child is not listed',
+    ecrNoCascade.rows.length === 6 && !ecrNoCascade.rows.some(r => r.itemNoWithRev === 'PART-ADDED-CHILD') &&
+    ecrNoCascade.rows.some(r => r.itemNoWithRev === 'PART-ADDED-ASSY'), ecrNoCascade.rows.map(r => r.itemNoWithRev));
 
   // fillEcrTemplate against the real vendored company template.
   const templatePath = path.join(rootDir, 'vendor/ECR_template.xlsx');
   if (fs.existsSync(templatePath)) {
     const templateWb = XLSX.readFile(templatePath);
-    ecrFill.fillEcrTemplate(templateWb, ecr.rows, XLSX);
+    ecrFill.fillEcrTemplate(templateWb, ecr.rows, XLSX, imNew.projectKey);
     const sheet = templateWb.Sheets['Sheet1'];
     const filledAoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: null });
     check('template header row (row 11) is untouched', filledAoa[10][0] === 'Line No.', filledAoa[10]);
@@ -276,6 +311,8 @@ console.log('\n== synthetic: ECR sheet generation (diffForEcr / fillEcrTemplate)
       filledAoa.slice(11, 11 + ecr.rows.length).every(r => r[0] !== null), filledAoa.slice(11, 16));
     check('a filled row carries the right composite item number in column C',
       filledAoa[11][2] === ecr.rows[0].itemNoWithRev, { got: filledAoa[11][2], expected: ecr.rows[0].itemNoWithRev });
+    check('PN header field (B3) is auto-filled from the parsed project key',
+      String(filledAoa[2][1]) === '12345', filledAoa[2]);
   } else {
     console.log('\n(vendor/ECR_template.xlsx not found — skipped the template-fill check)');
   }

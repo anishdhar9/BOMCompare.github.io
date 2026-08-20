@@ -79,10 +79,11 @@
       <div class="im-qc-head">
         <div>
           <h2>ECR sheet <span class="optional-tag">optional</span></h2>
-          <p class="dz-hint">Fills this organization's ECR (Engineering Change Request) template from the diff above. Action, Old/New Quantity, and the composite "Item No. With Rev" are derived automatically. Reason Code and the form's header fields (Project Status, Details Of Change, Engg. Comment, the 5-Why block) need your own judgment, so they are left blank for you to fill in.</p>
+          <p class="dz-hint">Fills this organization's ECR (Engineering Change Request) template from the diff above. Action, Old/New Quantity, and the composite "Item No. With Rev" are derived automatically. This is a complete structural diff — it can include real changes elsewhere in the BOM unrelated to the specific change this ECR is for, so review the generated rows and delete any that don't belong before filing. Reason Code and the form's header fields (Project Status, Details Of Change, Engg. Comment, the 5-Why block) need your own judgment, so they are left blank for you to fill in.</p>
         </div>
         <button type="button" class="btn btn-small" id="btn-ecr-export">Generate ECR sheet</button>
       </div>
+      <label class="dz-hint ecr-option"><input type="checkbox" id="ecr-cascade" checked> List every part inside a wholly new or removed assembly individually, however deeply nested (unchecked: collapse a new/removed assembly to one row and don't list its own children separately)</label>
       <div class="summary" id="ecr-summary"></div>
       <p class="notice warn hidden" id="ecr-other-changes"></p>
       <p class="dz-error" id="ecr-error"></p>
@@ -97,7 +98,7 @@
           <li><strong>Added:</strong> part numbers present in the newer file but not the older one.</li>
           <li><strong>Removed:</strong> part numbers present in the older file but not the newer one.</li>
           <li><strong>Changed:</strong> part numbers present in both, where Quantity, Revision, Material, Title, Description, or State differs. Material is compared with the same naming-convention normalization the main BOM Compare tool uses (DIN vs AISI grade, spacing, language), so a part written differently but chemically the same material is not reported as changed.</li>
-          <li><strong>ECR sheet:</strong> fills this organization's ECR (Engineering Change Request) template from the same diff. "Item No. With Rev" fuses the part number with a zero-padded revision suffix. A revision bump becomes an old-row/new-row pair (Drg. Obsolete + Drg. Revised), and Action (Part Added, Part Deleted, Qty Changed, Drg. Obsolete, Drg. Revised) is derived automatically. Reason Code and the form's header fields need your own judgment, so they are left blank. A part whose only change is Material, Title, Description, or State has no matching Action code, so it is reported separately instead of being turned into a row.</li>
+          <li><strong>ECR sheet:</strong> fills this organization's ECR (Engineering Change Request) template from a separate, hierarchical (position-aware) tree diff of the two files — a part is compared against its counterpart at the SAME position in the BOM, not just any row sharing its part number, so a part reused under several parents gets one row per parent that actually changed. "Item No. With Rev" fuses the part number with its raw revision value (unpadded) on a Drg. Revised/Drg. Obsolete row; other actions use the bare part number. A revision bump becomes an old-row/new-row pair — Drg. Revised (new rev, 0→1) then Drg. Obsolete (old rev, 1→0) — both referencing the parent's CURRENT revision. Action (Part Added, Part Deleted, Qty Changed, Drg. Obsolete, Drg. Revised) is derived automatically; the "PN" header field is filled from the project key when available. Reason Code and the rest of the form's header fields need your own judgment, so they are left blank. A part whose only change is Material, Title, Description, or State has no matching Action code, so it is reported separately instead of being turned into a row. This is a complete structural diff, not scoped to any one engineering change narrative — remove rows unrelated to the change you're filing before submitting.</li>
         </ul>
       </details>
     </section>
