@@ -22,6 +22,25 @@
     } catch (e) { return new Set(); }
   }
 
+  // Per-part priority tag — the user's own triage flag, independent of the
+  // fixed per-check severity ranking in js/findings.js (which still decides
+  // which check "owns" a part and the sort order below; priority never
+  // touches that). Same load/save/get/set shape as "mark reviewed" above,
+  // persisted under its own key so it survives a "Clear files & start over".
+  const PRIORITY_LS_KEY = 'bomcompare.priority.v1';
+  const PRIORITY_LEVELS = ['low', 'medium', 'high'];
+  const PRIORITY_LABELS = { low: 'Low', medium: 'Medium', high: 'High' };
+  function loadPriority() {
+    try {
+      const obj = JSON.parse(localStorage.getItem(PRIORITY_LS_KEY) || '{}');
+      const map = new Map();
+      if (obj && typeof obj === 'object') {
+        for (const pn of Object.keys(obj)) { if (PRIORITY_LEVELS.indexOf(obj[pn]) !== -1) map.set(pn, obj[pn]); }
+      }
+      return map;
+    } catch (e) { return new Map(); }
+  }
+
   const state = {
     cadSources: [],     // parsed CAD results (max 2: full structure + intended BOM)
     im: null,           // parsed Item Master result (+ fileName)
@@ -45,6 +64,7 @@
     sectionOpen: new Map(),  // qc-section id -> user override, survives re-renders
     traceOpen: new Map(),    // part number -> provenance-detail toggle open?, survives re-renders
     reviewedSet: loadReviewed(), // part numbers checked off "Parts needing attention", survives reloads (localStorage)
+    priorityMap: loadPriority(), // part number -> user-assigned priority ('low'|'medium'|'high'), survives reloads (localStorage)
     attentionVisibleCount: 0,    // unreviewed, non-grouped part count — set by renderAttention(), read by the dashboard tile
   };
 
@@ -62,6 +82,67 @@
     saveReviewed();
     renderDashboard();
   }
+
+  function savePriority() {
+    try {
+      const obj = {};
+      state.priorityMap.forEach(function (val, pn) { obj[pn] = val; });
+      localStorage.setItem(PRIORITY_LS_KEY, JSON.stringify(obj));
+    } catch (e) { /* ignore */ }
+  }
+  function getPriority(pn) { return state.priorityMap.get(BC.normNumber(pn)) || 'none'; }
+  // val: 'none'/'low'/'medium'/'high'. Purely a user-facing triage tag — does
+  // not affect check severity, sort order, dashboard tiles, or exports.
+  function setPriority(pn, val) {
+    const key = BC.normNumber(pn);
+    if (!key) return;
+    if (val === 'none') state.priorityMap.delete(key); else state.priorityMap.set(key, val);
+    savePriority();
+    renderDashboard();
+  }
+
+  // Two visual variants, both matching a (pn) -> element signature so
+  // swapping which one renders (see priorityControlEl below) is a one-line
+  // change. Variant A extends the app's existing severity-color badge
+  // vocabulary (.issue-badge's muted/amber/red tiers); deliberately no green
+  // for "low" — green means "pass" everywhere else in this app.
+  function priorityControlElBadge(pn) {
+    const val = getPriority(pn);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'priority-btn' + (val !== 'none' ? ' ' + val : '');
+    btn.textContent = val === 'none' ? '— priority' : PRIORITY_LABELS[val];
+    btn.title = 'Click to cycle priority (None → Low → Medium → High)';
+    btn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      const order = ['none'].concat(PRIORITY_LEVELS);
+      setPriority(pn, order[(order.indexOf(val) + 1) % order.length]);
+    });
+    return btn;
+  }
+
+  // Variant B: a plain <select>, same declared style as the mapping panel's
+  // dropdowns, sized for table-row density.
+  function priorityControlElSelect(pn) {
+    const sel = document.createElement('select');
+    sel.className = 'priority-select';
+    const opt0 = document.createElement('option');
+    opt0.value = 'none'; opt0.textContent = '— priority';
+    sel.appendChild(opt0);
+    for (const lvl of PRIORITY_LEVELS) {
+      const opt = document.createElement('option');
+      opt.value = lvl; opt.textContent = PRIORITY_LABELS[lvl];
+      sel.appendChild(opt);
+    }
+    sel.value = getPriority(pn);
+    sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
+    sel.addEventListener('change', function () { setPriority(pn, sel.value); });
+    return sel;
+  }
+
+  // Ships Variant A (cycling badge). Swap to priorityControlElSelect for the
+  // dropdown variant — every call site uses this one seam.
+  const priorityControlEl = priorityControlElBadge;
 
   // Base name suffix from the Item Master's SPN/PN project key, e.g.
   // '_SPN016823_PN22426'. Empty string when no key was found.
@@ -684,16 +765,38 @@
     return el;
   }
 
+  // Reveals a section's description text on demand instead of always showing
+  // it — stopPropagation matters because the surrounding section head already
+  // has its own click listener that toggles the results body.
+  function wireDescToggle(btn, descEl) {
+    btn.setAttribute('aria-expanded', 'false');
+    btn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      const open = descEl.classList.toggle('open');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+
+  // Section title + a collapsed-by-default description behind a small (i)
+  // toggle. Shared by qcSectionFor/lldboSectionFor/boughtOutSection so the
+  // "too much text" fix lives in one place instead of three.
+  function buildQcTitleBox(titleText, descText) {
+    const box = document.createElement('div');
+    box.innerHTML = '<div class="qc-section-title-row"><span class="qc-section-title"></span>' +
+      '<button type="button" class="qc-info-toggle" aria-label="Show description" title="Show description">i</button></div>' +
+      '<p class="qc-section-desc"></p>';
+    box.querySelector('.qc-section-title').textContent = titleText;
+    box.querySelector('.qc-section-desc').textContent = descText;
+    wireDescToggle(box.querySelector('.qc-info-toggle'), box.querySelector('.qc-section-desc'));
+    return box;
+  }
+
   function qcSectionFor(check, result, warnMsg) {
     const box = document.createElement('div');
     box.className = 'qc-section';
     const head = document.createElement('div');
     head.className = 'qc-section-head';
-    const titleBox = document.createElement('div');
-    titleBox.innerHTML = '<div class="qc-section-title"></div><p class="qc-section-desc"></p>';
-    titleBox.querySelector('.qc-section-title').textContent = check.title;
-    titleBox.querySelector('.qc-section-desc').textContent = check.desc;
-    head.appendChild(titleBox);
+    head.appendChild(buildQcTitleBox(check.title, check.desc));
     const soft = warnOnly(result);
     const pill = document.createElement('span');
     pill.className = 'qc-pill ' + (!result.applicable ? 'na' : (result.fail.length && !soft ? 'fail' : ((soft || warnMsg) ? 'warn' : 'pass')));
@@ -991,6 +1094,7 @@
     table.className = 'results-table';
     const htr = document.createElement('tr');
     addTh(htr, 'Reviewed');
+    addTh(htr, 'Priority');
     addTh(htr, 'Part Number');
     if (cols.title) addTh(htr, 'Title');
     addTh(htr, 'Issues found');
@@ -1026,6 +1130,9 @@
       });
       tdReviewed.appendChild(cb);
       tr.appendChild(tdReviewed);
+      const tdPriority = document.createElement('td');
+      tdPriority.appendChild(priorityControlEl(part.number));
+      tr.appendChild(tdPriority);
       const tdNum = document.createElement('td');
       tdNum.className = 'num-cell';
       tdNum.textContent = part.number;
@@ -1066,13 +1173,26 @@
     }
   }
 
-  // Collapsible toggle for the whole section, wired once (unlike the
-  // qc-section pattern, #attention-body's own node is never replaced by
-  // renderAttention() — only its innerHTML — so the 'open' class seeded in
-  // index.html survives every re-render with no state bookkeeping needed).
-  $('attention-head').addEventListener('click', function () {
-    $('attention-body').classList.toggle('open');
-  });
+  // Collapsible toggle for a whole section, wired once (unlike the
+  // qc-section pattern, these bodies are never replaced by re-render — only
+  // their innerHTML — so the 'open' class seeded in index.html survives every
+  // re-render with no state bookkeeping needed). Also flips the .expander
+  // chevron glyph so the section visibly reads as collapsible.
+  function wireHeadToggle(headId, bodyId, chevronId) {
+    $(headId).addEventListener('click', function () {
+      const open = $(bodyId).classList.toggle('open');
+      $(chevronId).textContent = open ? '▾' : '▸';
+    });
+  }
+  wireHeadToggle('attention-head', 'attention-body', 'attention-chevron');
+  wireHeadToggle('reviewed-parts-head', 'reviewed-parts-body', 'reviewed-parts-chevron');
+  wireHeadToggle('ignored-findings-head', 'ignored-findings-body', 'ignored-findings-chevron');
+
+  // Static panel intros (Item Master QC / LLDBO / Ignore List) — the
+  // biggest always-visible prose blocks — get the same (i) reveal-on-demand
+  // treatment as the per-check section descriptions above.
+  [['im-qc-info-btn', 'im-qc-desc'], ['lldbo-info-btn', 'lldbo-desc'], ['ignorelist-info-btn', 'ignorelist-desc']]
+    .forEach(function (p) { wireDescToggle($(p[0]), $(p[1])); });
 
   const IGNORED_FINDINGS_COLS = [
     ['number', 'Part Number'], ['title', 'Title'], ['description', 'Description'],
@@ -1118,11 +1238,6 @@
     body.appendChild(table);
   }
 
-  // Same rebuild-proof toggle as #attention-head above.
-  $('ignored-findings-head').addEventListener('click', function () {
-    $('ignored-findings-body').classList.toggle('open');
-  });
-
   const REVIEWED_PARTS_COLS = [['number', 'Part Number'], ['title', 'Title']];
 
   // Parts checked off "Parts needing attention" — the undo bin for that
@@ -1145,6 +1260,7 @@
     table.className = 'results-table';
     const htr = document.createElement('tr');
     addTh(htr, '');
+    addTh(htr, 'Priority');
     for (const [, label] of REVIEWED_PARTS_COLS) addTh(htr, label);
     addTh(htr, 'Issue(s) when reviewed');
     table.appendChild(htr);
@@ -1159,6 +1275,9 @@
       btn.addEventListener('click', function () { setReviewed(row.pn, false); });
       tdBtn.appendChild(btn);
       tr.appendChild(tdBtn);
+      const tdPriority = document.createElement('td');
+      tdPriority.appendChild(priorityControlEl(row.pn));
+      tr.appendChild(tdPriority);
       for (const [key] of REVIEWED_PARTS_COLS) addTd(tr, row.part ? row.part[key] : (key === 'number' ? row.pn : ''));
       const tdIssues = document.createElement('td');
       if (row.part) { for (const i of row.part.issues) tdIssues.appendChild(issueBadgeEl(i)); }
@@ -1168,11 +1287,6 @@
     }
     body.appendChild(table);
   }
-
-  // Same rebuild-proof toggle as #attention-head above.
-  $('reviewed-parts-head').addEventListener('click', function () {
-    $('reviewed-parts-body').classList.toggle('open');
-  });
 
   // AOA rows for the "Parts needing attention" export sheet — one row per part
   // with every issue found on it, so the same part isn't chased across sheets.
@@ -1290,11 +1404,7 @@
     box.className = 'qc-section';
     const head = document.createElement('div');
     head.className = 'qc-section-head';
-    const titleBox = document.createElement('div');
-    titleBox.innerHTML = '<div class="qc-section-title"></div><p class="qc-section-desc"></p>';
-    titleBox.querySelector('.qc-section-title').textContent = title;
-    titleBox.querySelector('.qc-section-desc').textContent = desc;
-    head.appendChild(titleBox);
+    head.appendChild(buildQcTitleBox(title, desc));
     const pill = document.createElement('span');
     pill.className = 'qc-pill ' + (fail.length ? 'fail' : 'pass');
     pill.textContent = fail.length ? fail.length + ' FLAGGED' : 'OK';
@@ -1504,14 +1614,11 @@
     box.className = 'qc-section';
     const head = document.createElement('div');
     head.className = 'qc-section-head';
-    const titleBox = document.createElement('div');
-    titleBox.innerHTML = '<div class="qc-section-title"></div><p class="qc-section-desc"></p>';
-    titleBox.querySelector('.qc-section-title').textContent = 'Bought-Out Parts (7-999-*)';
     const mismatchCount = boughtOut.filter(function (b) { return b.mismatch; }).length;
     const missingCount = boughtOut.filter(function (b) { return b.missingMaterial; }).length;
-    titleBox.querySelector('.qc-section-desc').textContent = 'Reference listing of every purchased/catalog part — not counted toward the checks above. ' +
+    const boughtOutDesc = 'Reference listing of every purchased/catalog part — not counted toward the checks above. ' +
       (mismatchCount || missingCount ? mismatchCount + ' material mismatch(es), ' + missingCount + ' missing material — marked below.' : 'No material issues noted.');
-    head.appendChild(titleBox);
+    head.appendChild(buildQcTitleBox('Bought-Out Parts (7-999-*)', boughtOutDesc));
     const pill = document.createElement('span');
     pill.className = 'qc-pill na';
     pill.textContent = boughtOut.length + ' PARTS';
@@ -1845,6 +1952,44 @@
   $('btn-compare').addEventListener('click', function () {
     if (runCompare()) $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
+
+  // "Clear files & start over" — resets everything about the CURRENT set of
+  // loaded files and their comparison results, but deliberately leaves the
+  // Ignore List (state.ignoreList + its dropzone) untouched: runCompare()/
+  // runRevisionCheck() already rebuild the ignore index fresh on every run,
+  // so a previously-loaded Ignore List keeps applying to the next comparison
+  // with no extra code. Also untouched: state.priorityMap, state.reviewedSet,
+  // and state.sectionOpen/traceOpen (the user's own triage tags and collapse
+  // preferences, none of which are tied to any particular set of files).
+  function clearAll() {
+    state.cadSources = [];
+    state.im = null; state.imQc = null; state.result = null;
+    state.lldbo = null; state.lldboResult = null; state.lldboCandidatesResult = null;
+    state.materialResult = null; state.revisionResult = null; state.titleDescResult = null;
+    state.virtualResult = null; state.findings = null;
+    state.filter = ''; state.showGrouped = false; state.ignoreBoughtOutRevision = false;
+    state.folderHandle = null;
+
+    $('file-cad').value = ''; $('file-im').value = ''; $('file-lldbo').value = '';
+    renderCadSources('', '');
+    setImStatus('', [], '');
+    setLldboStatus('', [], '');
+    $('filter').value = '';
+    $('folder-status').textContent = '';
+    $('folder-status').className = 'folder-status';
+    switchTab('missing');
+
+    hideImQc();            // also clears qc-summary/qc-sections/qc-callout
+    hideLldboResults();    // clears LLDBO results only — #lldbo-panel's dropzone stays usable
+    hideMaterialResults();
+    hideRevisionResults();
+    hideTitleDescResults();
+    $('results').classList.add('hidden');
+    clearNotices();
+    updateCompareButton();
+  }
+
+  $('btn-clear-all').addEventListener('click', clearAll);
 
   function fmtQty(v) {
     if (v === null || v === undefined) return '';
