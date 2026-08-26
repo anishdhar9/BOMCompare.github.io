@@ -374,6 +374,19 @@ console.log('\n== synthetic: Description CAD vs Item Master (titledesc-compare) 
   check('punctuation stays significant: "A - B" != "A + B"', M('A - B', 'A + B') === false);
   check('blank never matches', M('', 'x') === false && M('x', '') === false);
 
+  const A = titleDescCompare.isAutoMatchedAppend;
+  check('CAD-appended material suffix is an auto-match: "GSF PRO 180" -> "GSF PRO 180 AISI 304"',
+    A('GSF PRO 180', 'GSF PRO 180 AISI 304') === true);
+  check('auto-match is direction-agnostic (IM longer than CAD too)',
+    A('GSF PRO 180 AISI 304', 'GSF PRO 180') === true);
+  check('a genuine mid-string digit change is NOT an auto-match (must stay flagged)',
+    A('OD 539 X 4 THK.', 'OD 539 X 3 THK.') === false);
+  check('a genuine thread-size change is NOT an auto-match (must stay flagged)',
+    A('G 1/4, Dia. 7.5', 'G 1/8, Dia. 7.5') === false);
+  check('already-equal strings are not "auto-matched" (that is descriptionsMatch\'s job)',
+    A('Same Text', 'Same Text') === false);
+  check('blank never auto-matches', A('', 'x') === false && A('x', '') === false);
+
   const imAoa = [
     ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)'],
     ['7-000-ROOT', '-', 'Machine', 'Machine desc'],
@@ -384,6 +397,7 @@ console.log('\n== synthetic: Description CAD vs Item Master (titledesc-compare) 
     ['2-100-PROCURED', '5', 'Procured elsewhere', 'something else'],
     ['7-909-00001', '6', 'END OF LINE', 'marker text'],
     ['7-100-IMBLANK', '7', 'IM blank', ''],
+    ['7-100-SUFFIX', '8', 'Material suffix', 'GSF PRO 180'],
   ];
   const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
     utils: { sheet_to_json: () => imAoa },
@@ -397,6 +411,7 @@ console.log('\n== synthetic: Description CAD vs Item Master (titledesc-compare) 
       { number: '2-100-PROCURED', description: 'a different thing' },
       { number: '7-909-00001', description: 'anything at all' },
       { number: '7-100-IMBLANK', description: 'CAD has one' },
+      { number: '7-100-SUFFIX', description: 'GSF PRO 180 AISI 304' },
     ],
   };
   const res = titleDescCompare.compareTitleDescription([cadSource], im);
@@ -404,6 +419,10 @@ console.log('\n== synthetic: Description CAD vs Item Master (titledesc-compare) 
   check('only the genuine difference is flagged',
     res.mismatches.length === 1 && res.mismatches[0].number === '7-100-DIFF',
     res.mismatches.map(m => m.number));
+  check('a CAD-appended material suffix lands in autoMatched, not mismatches',
+    !res.mismatches.some(m => m.number === '7-100-SUFFIX') &&
+    res.autoMatched.length === 1 && res.autoMatched[0].number === '7-100-SUFFIX',
+    { mismatches: res.mismatches.map(m => m.number), autoMatched: res.autoMatched.map(m => m.number) });
   check('spacing-only difference is not flagged', !res.mismatches.some(m => m.number === '7-100-SPACING'));
   check('purchased X-999 part is excluded', !res.mismatches.some(m => m.number === '7-999-00001'));
   check('non-7 procured part is excluded', !res.mismatches.some(m => m.number === '2-100-PROCURED'));
@@ -1751,15 +1770,15 @@ console.log('\n== synthetic: LLDBO parsing + comparison against Item Master ==')
 console.log('\n== synthetic: LLDBO candidate detection (detectLldboCandidates) ==');
 {
   const candAoa = [
-    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)'],
-    ['MACH-01', '-', 'Test Machine', 'root row, should never be a candidate even though it says Motor'],
-    ['7-909-00001', '1', 'END OF LINE', 'sentinel row, should never be a candidate even though it says Seal'],
-    ['7-999-AAA', '2', 'AC Motor 3PH', 'drive motor'],
-    ['7-999-AAA', '3', 'AC Motor 3PH', 'drive motor'],          // same PN again at a different position -> dedup
-    ['7-999-BBB', '4', 'Seal Kit', 'shaft seal'],
-    ['7-234-CCC', '5', 'Motor mounting bracket', 'holds the motor in place'], // review tier: keyword, not 999-numbered
-    ['7-234-DDD', '6', 'Pneum.Dichtung DN200', ''],              // review tier: German seal keyword, not 999-numbered
-    ['7-100-ORD', '7', 'Ordinary bracket', 'no keyword here'],   // not a candidate at all
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity'],
+    ['MACH-01', '-', 'Test Machine', 'root row, should never be a candidate even though it says Motor', '1 Each'],
+    ['7-909-00001', '1', 'END OF LINE', 'sentinel row, should never be a candidate even though it says Seal', ''],
+    ['7-999-AAA', '2', 'AC Motor 3PH', 'drive motor', '2 Each'],
+    ['7-999-AAA', '3', 'AC Motor 3PH', 'drive motor', '2 Each'],          // same PN again at a different position -> dedup
+    ['7-999-BBB', '4', 'Seal Kit', 'shaft seal', '5 Each'],
+    ['7-234-CCC', '5', 'Motor mounting bracket', 'holds the motor in place', '1 Each'], // review tier: keyword, not 999-numbered
+    ['7-234-DDD', '6', 'Pneum.Dichtung DN200', '', '3 Each'],              // review tier: German seal keyword, not 999-numbered
+    ['7-100-ORD', '7', 'Ordinary bracket', 'no keyword here', '1 Each'],   // not a candidate at all
   ];
   const candIm = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, { utils: { sheet_to_json: () => candAoa } });
 
@@ -1785,6 +1804,10 @@ console.log('\n== synthetic: LLDBO candidate detection (detectLldboCandidates) =
     preview.confident.concat(preview.review).map(c => [c.number, c.keyword]));
   check('preview: candidate entries carry Row # and parent location',
     !!preview.confident[0].sourceRow && preview.confident.every(c => 'parentNumber' in c), preview.confident);
+  check('preview: candidate entries carry the Item Master Quantity',
+    preview.confident.find(c => c.number === '7-999-AAA').quantity === '2 Each' &&
+    preview.confident.find(c => c.number === '7-999-BBB').quantity === '5 Each',
+    preview.confident.map(c => [c.number, c.quantity]));
 
   // Cross-checking: an LLDBO file tracking one confident-tier PN (AAA) and
   // one review-tier PN (CCC) — both should drop out once loaded, proving the
@@ -1830,6 +1853,31 @@ console.log('\n== synthetic: LLDBO candidate detection (detectLldboCandidates) =
   const regPreview = findings.buildRegistry({ lldboCandidatesResult: preview });
   check('findings registry: uncross-checked preview never feeds the registry, even with candidates present',
     regPreview.parts.length === 0, regPreview.parts);
+}
+
+console.log('\n== synthetic: LLDBO candidate detection skips assemblies (child parts present) ==');
+{
+  // 7-500-MOTASSY is an assembly (it has a child, MOTCHILD, at Row Order
+  // "1.1") whose own title matches the "motor" keyword — it must be
+  // skipped, since it is a container, not itself a purchasable part. The
+  // real candidate is its child, which must still be classified normally.
+  // 7-999-LEAFONLY has no children and must be unaffected by the new rule.
+  const assyAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity'],
+    ['MACH-02', '-', 'Test Machine 2', 'root', '1 Each'],
+    ['7-500-MOTASSY', '1', 'Motor Cover Assembly', 'wraps the drive motor', '1 Each'],
+    ['7-999-MOTCHILD', '1.1', 'AC Motor', 'the actual long-lead motor inside the assembly', '1 Each'],
+    ['7-999-LEAFONLY', '2', 'Seal Kit', 'shaft seal, no children', '1 Each'],
+  ];
+  const assyIm = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, { utils: { sheet_to_json: () => assyAoa } });
+  const res = lldboCompare.detectLldboCandidates(assyIm, null, {});
+  check('an assembly row (has a child) is never classified, even though it matches a keyword',
+    !res.confident.some(c => c.number === '7-500-MOTASSY') && !res.review.some(c => c.number === '7-500-MOTASSY'),
+    res.confident.concat(res.review).map(c => c.number));
+  check('the actual child part is classified normally (confident tier: 999-numbered)',
+    res.confident.some(c => c.number === '7-999-MOTCHILD'), res.confident.map(c => c.number));
+  check('a leaf part with no children is unaffected by the new rule',
+    res.confident.some(c => c.number === '7-999-LEAFONLY'), res.confident.map(c => c.number));
 }
 
 console.log('\n== synthetic: material normalization (materialsMatch) ==');

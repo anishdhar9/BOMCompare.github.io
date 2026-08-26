@@ -1461,8 +1461,8 @@
   const LLDBO_MISSING_COLS = [['number', 'Part Number'], ['description', 'Description'], ['qtyText', 'LLDBO Qty'], ['sourceRow', 'LLDBO Row #']];
   const LLDBO_QTY_COLS = [['number', 'Part Number'], ['description', 'Description'], ['lldboQty', 'LLDBO Qty'], ['imQty', 'Item Master Qty'],
     ['sourceRow', 'LLDBO Row #'], ['foundUnder', 'Found Under (Item Master)']];
-  const LLDBO_CANDIDATE_COLS = [['number', 'Part Number'], ['title', 'Title'], ['description', 'Description'], ['keyword', 'Matched Keyword']]
-    .concat(LOCATION_COLS);
+  const LLDBO_CANDIDATE_COLS = [['number', 'Part Number'], ['title', 'Title'], ['description', 'Description'],
+    ['quantity', 'Quantity'], ['keyword', 'Matched Keyword']].concat(LOCATION_COLS);
 
   function renderLldboPanel() {
     const res = state.lldboResult;             // null until an LLDBO file is also loaded
@@ -1835,6 +1835,55 @@
   const TITLEDESC_MISMATCH_COLS = [['number', 'Part Number'], ['title', 'Title']].concat(LOCATION_COLS).concat(
     [['imDescription', 'Item Master Description'], ['cadDescription', 'CAD Description']]);
 
+  // Parts where the CAD description is the Item Master description with
+  // extra text appended at the end (most often a material grade) — not a
+  // mismatch, since nothing in the shared text changed (see
+  // isAutoMatchedAppend in js/titledesc-compare.js). Modeled on
+  // boughtOutSection() above, not lldboSectionFor(): that helper colors its
+  // pill red/green off fail.length, which would wrongly imply these rows
+  // are still a problem — this is a reference list, same as Bought-Out Parts.
+  function titleDescAutoMatchSection(autoMatched) {
+    const box = document.createElement('div');
+    box.className = 'qc-section';
+    const head = document.createElement('div');
+    head.className = 'qc-section-head';
+    head.appendChild(buildQcTitleBox('Description: CAD adds extra text (not flagged)',
+      'Parts where the CAD description is the Item Master description with extra text appended at the ' +
+      'end — most often a material grade, e.g. "GSF PRO 180" → "GSF PRO 180 AISI 304" — and nothing in the ' +
+      'shared text changed. Listed here for transparency, not counted as a finding.'));
+    const pill = document.createElement('span');
+    pill.className = 'qc-pill na';
+    pill.textContent = autoMatched.length + ' PARTS';
+    head.appendChild(pill);
+    box.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'qc-section-body'; // always starts collapsed — reference list, not an action item
+    if (!autoMatched.length) {
+      body.innerHTML = '<div class="empty-state">No parts matched this pattern.</div>';
+    } else {
+      const table = document.createElement('table');
+      table.className = 'results-table';
+      const htr = document.createElement('tr');
+      for (const [, label] of TITLEDESC_MISMATCH_COLS) addTh(htr, label);
+      table.appendChild(htr);
+      for (const row of autoMatched) {
+        const tr = document.createElement('tr');
+        for (const col of TITLEDESC_MISMATCH_COLS) addTd(tr, row[col[0]]);
+        table.appendChild(tr);
+      }
+      body.appendChild(table);
+    }
+    box.appendChild(body);
+
+    // Singleton section (called once) — always starts collapsed regardless
+    // of content, per the comment above, unless the user has toggled it.
+    const id = 'titleDescAutoMatch';
+    if (state.sectionOpen.get(id)) body.classList.add('open');
+    head.addEventListener('click', function () { state.sectionOpen.set(id, body.classList.toggle('open')); });
+    return box;
+  }
+
   function renderTitleDescPanel() {
     const res = state.titleDescResult;
     const sections = $('titledesc-sections');
@@ -1853,6 +1902,7 @@
         '✓ CAD and Item Master descriptions agree for every shared part.',
         'titleDesc', true
       ));
+      sections.appendChild(titleDescAutoMatchSection(res.autoMatched));
     } else {
       const note = document.createElement('div');
       note.className = 'qc-section';
@@ -1903,6 +1953,12 @@
         rows.push([]);
         rows.push(TITLEDESC_MISMATCH_COLS.map(function (c) { return c[1]; }));
         for (const m of res.mismatches) rows.push(TITLEDESC_MISMATCH_COLS.map(function (c) { return m[c[0]]; }));
+      }
+      rows.push([]);
+      rows.push(['Description: CAD adds extra text (not flagged)', (res.autoMatched || []).length + ' parts — reference listing, not counted as a finding']);
+      if (res.autoMatched && res.autoMatched.length) {
+        rows.push(TITLEDESC_MISMATCH_COLS.map(function (c) { return c[1]; }));
+        for (const m of res.autoMatched) rows.push(TITLEDESC_MISMATCH_COLS.map(function (c) { return m[c[0]]; }));
       }
     }
     return rows;
