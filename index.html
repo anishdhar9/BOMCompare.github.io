@@ -54,6 +54,7 @@
 
     <section class="actions">
       <button type="button" class="btn btn-primary btn-big" id="btn-compare" disabled>Compare BOMs</button>
+      <button type="button" class="btn btn-small" id="btn-clear-all">Clear files &amp; start over</button>
     </section>
 
     <section class="dashboard hidden" id="dashboard">
@@ -68,7 +69,7 @@
     <section class="im-qc hidden" id="attention">
       <div class="im-qc-head im-qc-head-toggle" id="attention-head">
         <div>
-          <h2>Parts needing attention</h2>
+          <h2><span class="expander" id="attention-chevron">▾</span> Parts needing attention</h2>
           <p class="dz-hint">One row per part, worst issue first. A part flagged by several checks is listed once here, and shows every issue found on it. The detail sections below still carry the full per-check breakdown.</p>
         </div>
         <span class="qc-pill na" id="attention-count"></span>
@@ -79,7 +80,7 @@
     <section class="im-qc hidden" id="reviewed-parts">
       <div class="im-qc-head im-qc-head-toggle" id="reviewed-parts-head">
         <div>
-          <h2>Already reviewed</h2>
+          <h2><span class="expander" id="reviewed-parts-chevron">▸</span> Already reviewed</h2>
           <p class="dz-hint">Parts checked off from "Parts needing attention" above. They stay out of that list until you bring them back — saved in this browser, so it survives closing the page.</p>
         </div>
         <span class="qc-pill na" id="reviewed-parts-count"></span>
@@ -90,9 +91,9 @@
     <section class="im-qc hidden" id="im-qc">
       <div class="im-qc-head">
         <div>
-          <h2>Item Master data quality</h2>
+          <h2>Item Master data quality <button type="button" class="qc-info-toggle" id="im-qc-info-btn" aria-label="Show description" title="Show description">i</button></h2>
           <p class="source-line" id="qc-source"></p>
-          <p class="dz-hint">Checks the Item Master file by itself. No CAD BOM is needed. This catches manual edits in Vault or the ERP system that do not agree with other fields on the same row (for example, someone changes Quantity without updating Item Qty).</p>
+          <p class="dz-hint panel-desc" id="im-qc-desc">Checks the Item Master file by itself. No CAD BOM is needed. This catches manual edits in Vault or the ERP system that do not agree with other fields on the same row (for example, someone changes Quantity without updating Item Qty).</p>
         </div>
         <button type="button" class="btn btn-small" id="btn-qc-export">Download QC report</button>
       </div>
@@ -108,8 +109,8 @@
     <section class="im-qc" id="lldbo-panel">
       <div class="im-qc-head">
         <div>
-          <h2>Long-Lead Parts (LLDBO) <span class="optional-tag">optional</span></h2>
-          <p class="dz-hint">Long-lead direct-bought-out parts are released to procurement early, ahead of the normal BOM release, to cover supplier lead times. Drop the "PNxxxx_LLDBO" file. Once the Item Master is also loaded, this check confirms that each part reached the released BOM. It also scans the Item Master itself for motor/actuator/seal/nozzle-like parts that look like they should be tracked here but aren't — this half runs as soon as the Item Master loads, even before an LLDBO file exists.</p>
+          <h2>Long-Lead Parts (LLDBO) <span class="optional-tag">optional</span> <button type="button" class="qc-info-toggle" id="lldbo-info-btn" aria-label="Show description" title="Show description">i</button></h2>
+          <p class="dz-hint panel-desc" id="lldbo-desc">Long-lead direct-bought-out parts are released to procurement early, ahead of the normal BOM release, to cover supplier lead times. Drop the "PNxxxx_LLDBO" file. Once the Item Master is also loaded, this check confirms that each part reached the released BOM. It also scans the Item Master itself for motor/actuator/seal/nozzle-like parts that look like they should be tracked here but aren't — this half runs as soon as the Item Master loads, even before an LLDBO file exists.</p>
         </div>
         <button type="button" class="btn btn-small" id="btn-lldbo-export">Download LLDBO check</button>
       </div>
@@ -131,8 +132,8 @@
     <section class="im-qc" id="ignorelist-panel">
       <div class="im-qc-head">
         <div>
-          <h2>Ignore List <span class="optional-tag">optional</span></h2>
-          <p class="dz-hint">Parts intentionally left in a non-standard BOM state (e.g. still Reference, or a WIP/sketch placeholder) that should not be flagged. Drop the "IgnoreList" file — its "From" column names which check to suppress each part from. Suppressed parts are removed from the checks named there and listed separately, in the collapsible "Ignored findings" section near the bottom of the page.</p>
+          <h2>Ignore List <span class="optional-tag">optional</span> <button type="button" class="qc-info-toggle" id="ignorelist-info-btn" aria-label="Show description" title="Show description">i</button></h2>
+          <p class="dz-hint panel-desc" id="ignorelist-desc">Parts intentionally left in a non-standard BOM state (e.g. still Reference, or a WIP/sketch placeholder) that should not be flagged. Drop the "IgnoreList" file — its "From" column names which check to suppress each part from. Suppressed parts are removed from the checks named there and listed separately, in the collapsible "Ignored findings" section near the bottom of the page.</p>
         </div>
       </div>
       <div class="dropzone dropzone-inline" id="zone-ignorelist" data-role="ignorelist" tabindex="0">
@@ -195,7 +196,7 @@
     <section class="im-qc hidden" id="ignored-findings">
       <div class="im-qc-head im-qc-head-toggle" id="ignored-findings-head">
         <div>
-          <h2>Ignored findings</h2>
+          <h2><span class="expander" id="ignored-findings-chevron">▸</span> Ignored findings</h2>
           <p class="dz-hint">Parts matched by the Ignore List — suppressed from the checks named in its "From" column. Shown here for transparency, collapsed by default.</p>
         </div>
         <span class="qc-pill na" id="ignored-findings-count"></span>
