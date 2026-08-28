@@ -134,6 +134,16 @@
   // match outside that convention — shown separately for a human to check,
   // never treated as an actionable finding on its own (see js/findings.js).
   //
+  // Assemblies are skipped even when their own title/description matches a
+  // keyword (e.g. "Motor Cover Assembly"): an assembly is a container, not
+  // itself the purchasable long-lead item — the real candidate is one of
+  // its children (e.g. the actual motor inside it), which gets its own,
+  // separate entry when the loop reaches that row. "Has a child" is read
+  // straight from the Item Master's own Row Order hierarchy
+  // (imQc.buildAssemblySet, the same Item-Master-only helper
+  // material-compare.js already uses to exclude assemblies from the
+  // Material Completeness check) — this never looks at CAD data.
+  //
   // Works with the Item Master alone: `lldbo` may be null/undefined (no
   // LLDBO file loaded yet). In that case every candidate is returned
   // unfiltered as an uncross-checked preview (crossChecked:false) — nothing
@@ -146,6 +156,7 @@
   function detectLldboCandidates(im, lldbo, opts) {
     const isIgnored = (opts && opts.isIgnored) || function () { return false; };
     const pathIndex = imQc.buildPathIndex(im.rows);
+    const assemblies = imQc.buildAssemblySet(im.rows, pathIndex);
 
     const confidentAll = [];
     const reviewAll = [];
@@ -153,6 +164,7 @@
     for (const row of im.rows) {
       if (imQc.isEndOfLine(row)) continue; // ERP completeness marker, not a part
       if (Array.isArray(row.path) && row.path.length === 0) continue; // root row: the machine itself
+      if (assemblies.has(row)) continue; // container, not itself a purchasable part — see comment above
       const pn = normNumber(row.number);
       if (!pn || seen.has(pn)) continue;
       const kw = matchCandidateKeyword(row);
@@ -161,7 +173,8 @@
       const parent = imQc.parentOf(pathIndex, row);
       const entry = {
         number: row.number, title: row.title || '', description: row.description || '',
-        keyword: kw, sourceRow: row.sourceRow || '',
+        keyword: kw, quantity: row.quantityText || (row.qty === null || row.qty === undefined ? '' : String(row.qty)),
+        sourceRow: row.sourceRow || '',
         parentNumber: parent ? parent.number : '', parentTitle: parent ? (parent.title || '') : '',
       };
       (imQc.PURCHASED_PART_RE.test(row.number) ? confidentAll : reviewAll).push(entry);
