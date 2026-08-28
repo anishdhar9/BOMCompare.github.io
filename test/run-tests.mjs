@@ -455,17 +455,38 @@ console.log('\n== synthetic: Description CAD vs Item Master (titledesc-compare) 
   };
   const pdfFirst = titleDescCompare.compareTitleDescription([pdfLikeSource, cadSource], im);
   const invFirst = titleDescCompare.compareTitleDescription([cadSource, pdfLikeSource], im);
-  check('the Inventor BOM export (hasStructure) is used regardless of load order — PDF first',
+  check('the Inventor BOM export (source===leveled-sheet) is used regardless of load order — PDF first',
     pdfFirst.applicable === true && pdfFirst.mismatches.length === 1 && pdfFirst.mismatches[0].number === '7-100-DIFF' &&
     pdfFirst.mismatches[0].cadDescription === 'OD 539 X 4 THK.', // the real Inventor text, not the PDF's title-echo
     pdfFirst);
-  check('the Inventor BOM export (hasStructure) is used regardless of load order — Inventor first',
+  check('the Inventor BOM export (source===leveled-sheet) is used regardless of load order — Inventor first',
     invFirst.applicable === true && invFirst.mismatches.length === 1 && invFirst.mismatches[0].number === '7-100-DIFF' &&
     invFirst.mismatches[0].cadDescription === 'OD 539 X 4 THK.',
     invFirst);
   const pdfOnly = titleDescCompare.compareTitleDescription([pdfLikeSource], im);
   check('a non-Inventor source alone (e.g. just the PDF) is not applicable, even with "non-empty" description text',
     pdfOnly.applicable === false, pdfOnly);
+
+  // Real-data bug #2: an earlier version of this fix required hasStructure
+  // (a "BOM Structure" column) as well as source==='leveled-sheet', reusing
+  // the same signature app.js uses for a cosmetic "Inventor BOM export"
+  // label. But BOM Structure is an independently-optional column from
+  // Description in Vault's export dialog -- a real Inventor export with
+  // Description enabled and BOM Structure left out was wrongly rejected as
+  // "not applicable", hiding every genuine description defect for that
+  // project. source==='leveled-sheet' alone is the correct, sufficient test
+  // (see the comment above cadDescriptionByPn): it already excludes the PDF
+  // (tagged source:'pdf') and the flat Vault export (source:'flat-xlsx').
+  const noStructureSource = {
+    kind: 'cad', source: 'leveled-sheet', hasStructure: false, hasQty: false, items: [
+      { number: '7-100-DIFF', description: 'OD 539 X 4 THK.' },
+    ],
+  };
+  const noStructureRes = titleDescCompare.compareTitleDescription([noStructureSource], im);
+  check('an Inventor export without a BOM Structure column is still used for Description comparison',
+    noStructureRes.applicable === true && noStructureRes.mismatches.length === 1 &&
+    noStructureRes.mismatches[0].number === '7-100-DIFF',
+    noStructureRes);
 }
 
 console.log('\n== synthetic: virtual parts (no CAD file behind a subassembly) ==');
@@ -951,6 +972,24 @@ console.log('\n== synthetic: Ignore List suppresses compareAll() findings, with 
   check('without an ignore predicate, nothing is suppressed (backward compatible)',
     resNoIgnore.missingRoots.some(n => n.item.number === 'IGNORED-ASSY') && resNoIgnore.ignoredFindings.length === 0,
     resNoIgnore.missingRoots.map(n => n.item.number));
+
+  // isEnabled(checkId) gating ("Checks to run"): sources.result alone feeds
+  // five different checkIds (missing/reference/qty/qtyCascade/imOnly) --
+  // the trickiest case this predicate has to handle, since gating by
+  // nulling out the whole result object would take out all five at once
+  // instead of just the one the user turned off. Reuses `res` above (real
+  // missingRoots: CHILD-1 + PART-A; real qtyMismatches: PART-C).
+  const regMissingOff = findings.buildRegistry({ result: res }, function (id) { return id !== 'missing'; });
+  check('isEnabled: disabling "missing" removes missing-tree findings but keeps qty findings from the same result object',
+    !regMissingOff.byPn.has('PART-A') && !regMissingOff.byPn.has('CHILD-1') && regMissingOff.byPn.has('PART-C'),
+    Array.from(regMissingOff.byPn.keys()));
+  const regQtyOff = findings.buildRegistry({ result: res }, function (id) { return id !== 'qty'; });
+  check('isEnabled: disabling "qty" removes qty findings but keeps missing-tree findings from the same result object',
+    !regQtyOff.byPn.has('PART-C') && regQtyOff.byPn.has('PART-A') && regQtyOff.byPn.has('CHILD-1'),
+    Array.from(regQtyOff.byPn.keys()));
+  const regAllOff = findings.buildRegistry({ result: res }, function () { return false; });
+  check('isEnabled: disabling everything empties the registry even though sources.result is present',
+    regAllOff.byPn.size === 0, Array.from(regAllOff.byPn.keys()));
 }
 
 console.log('\n== synthetic: folder classification recognizes the Ignore List filename ==');
