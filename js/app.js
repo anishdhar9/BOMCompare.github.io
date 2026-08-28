@@ -427,6 +427,9 @@
     im.fileName = file.name;
     state.im = im;
     setImStatus(file.name, chipsFor(im), '');
+    if (im.cadShaped) {
+      notice('warn', 'The file in the Item Master box looks like it might be a CAD BOM export (it has CAD-only columns such as "File"/"Thumbnail"/"BOM Structure"). If that was a mistake, drop it on the CAD BOM box on the left instead.');
+    }
     state.imQc = BC.imQc.runChecks(im);
     renderImQc();
     runLldboCheck(); // runs even without an LLDBO file yet — shows candidate parts as a preview

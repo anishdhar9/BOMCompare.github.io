@@ -164,10 +164,20 @@
   }
 
   // Emits the ECR row(s), if any, for a node present on BOTH sides at a
-  // matched position: a revision-bump pair, a Qty Changed row, or (no
-  // Action code exists for these) an "other change" report.
+  // matched position: a revision-bump pair, a Qty Changed row, and/or (no
+  // Action code exists for these) an "other change" report for anything
+  // else that changed alongside. Revision and Quantity each only ever get
+  // ONE representation (a revision bump wins the row when both changed
+  // together, matching the real reference sample's own precedent of a
+  // binary 0/1 quantity on that pair rather than the part's real quantity)
+  // -- but a Quantity change that loses out to a revision bump is not
+  // simply dropped: it's routed into otherChanges just like Material/Title/
+  // Description/State already were, so nothing silently vanishes.
   function emitMatchedNodeRow(oldRow, newRow, parentComposite, ctx) {
-    if (normStr(oldRow.revision).toUpperCase() !== normStr(newRow.revision).toUpperCase()) {
+    const revisionChanged = normStr(oldRow.revision).toUpperCase() !== normStr(newRow.revision).toUpperCase();
+    const qtyChanged = !qtyEqual(oldRow.qty, newRow.qty);
+
+    if (revisionChanged) {
       ctx.rows.push({
         subAssyNumberWithRev: parentComposite, itemNoWithRev: itemNoWithRev(newRow),
         description: descriptionOf(newRow), oldQty: 0, newQty: 1, action: 'Drg. Revised',
@@ -176,18 +186,24 @@
         subAssyNumberWithRev: parentComposite, itemNoWithRev: itemNoWithRev(oldRow),
         description: descriptionOf(oldRow), oldQty: 1, newQty: 0, action: 'Drg. Obsolete',
       });
-      return;
-    }
-    if (!qtyEqual(oldRow.qty, newRow.qty)) {
+    } else if (qtyChanged) {
       ctx.rows.push({
         subAssyNumberWithRev: parentComposite, itemNoWithRev: bareNumber(newRow),
         description: descriptionOf(newRow), oldQty: roundQty(oldRow.qty), newQty: roundQty(newRow.qty),
         action: 'Qty Changed',
       });
-      return;
     }
+
     const fields = [];
-    if (normStr(oldRow.material) !== normStr(newRow.material)) fields.push('Material');
+    // Only reachable when qtyChanged is true AND revisionChanged already
+    // claimed the row above -- the ordinary qty-only case already got its
+    // own 'Qty Changed' row and must not be double-reported here too.
+    if (revisionChanged && qtyChanged) fields.push('Quantity');
+    const oldMat = normStr(oldRow.material);
+    const newMat = normStr(newRow.material);
+    let materialsDiffer = oldMat !== newMat;
+    if (materialsDiffer && ctx.materialsMatch) materialsDiffer = !ctx.materialsMatch(oldMat, newMat);
+    if (materialsDiffer) fields.push('Material');
     if (normStr(oldRow.title) !== normStr(newRow.title)) fields.push('Title');
     if (normStr(oldRow.description) !== normStr(newRow.description)) fields.push('Description');
     if (normStr(oldRow.state) !== normStr(newRow.state)) fields.push('State');
@@ -242,13 +258,17 @@
   // opts.cascadeIntoNewSubtrees (default true): whether a wholly new/removed
   // subassembly's own children each get their own Added/Deleted row, or the
   // whole subtree collapses to one row for the subassembly itself.
+  // opts.materialsMatch (optional): material-compare.js's naming-convention
+  // normalizer, matching js/im-diff-compare.js's diffItemMasters -- without
+  // it, a pure spelling difference (e.g. "1.4301" vs "AISI 304") is reported
+  // in otherChanges even though the top diff (with it injected) would not.
   // Returns { rows: [...ECR table rows, in hierarchical order], otherChanges }.
   function diffForEcr(imOld, imNew, indexItemMaster, opts) {
     const options = { cascadeIntoNewSubtrees: !opts || opts.cascadeIntoNewSubtrees !== false };
     const oldIndex = indexItemMaster(imOld);
     const newIndex = indexItemMaster(imNew);
     const ctx = {
-      rows: [], otherChanges: [],
+      rows: [], otherChanges: [], materialsMatch: opts && opts.materialsMatch,
       oldChildrenOfRow: buildChildrenOfRow(imOld, oldIndex.parentOf),
       newChildrenOfRow: buildChildrenOfRow(imNew, newIndex.parentOf),
     };

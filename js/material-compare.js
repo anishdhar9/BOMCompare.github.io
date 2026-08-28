@@ -151,11 +151,18 @@
   // some Inventor BOM exports omit it (columns are user-configurable in
   // Vault) while others include it — so this checks actual content
   // (`hasMaterial`), not the source's format/kind.
+  // Merges material data across EVERY loaded CAD source with hasMaterial,
+  // not just the first one that has any — a single sparse source (columns
+  // are user-configurable in Vault, so one export can have Material
+  // populated on only a couple percent of rows) used to silently win over a
+  // more complete second source just by being checked first. Same pattern
+  // js/revision-compare.js's cadRevisionByPn already applies for revisions.
   function cadMaterialByPn(cadSources) {
+    var map = new Map();
+    var contributing = [];
     for (var i = 0; i < cadSources.length; i++) {
       var src = cadSources[i];
       if (!src.hasMaterial) continue;
-      var map = new Map();
       var any = false;
       for (var j = 0; j < src.items.length; j++) {
         var it = src.items[j];
@@ -165,9 +172,9 @@
         any = true;
         if (!map.has(pn)) map.set(pn, mat);
       }
-      if (any) return { source: src, byPn: map };
+      if (any) contributing.push(src);
     }
-    return null;
+    return map.size ? { sources: contributing, byPn: map } : null;
   }
 
   // cadSources: the array passed to compareAll (0-2 CAD sources).
@@ -177,6 +184,18 @@
       return {
         applicable: false,
         reason: 'No loaded CAD source carries material data — the Vault multi-level PDF never does, and it depends on which columns were included in a flat Vault export or Inventor BOM export.',
+        boughtOut: imQc.boughtOutParts(im),
+      };
+    }
+    // Without a Row Order column, every row fails the `Array.isArray(row.path)`
+    // guard below and the loop silently finds nothing to compare — reporting
+    // that as "applicable, zero mismatches" would look like a clean bill of
+    // health rather than "this check never actually ran." Mirrors imqc.js's
+    // own Check 6 guard for the identical condition.
+    if (!im.hasPaths) {
+      return {
+        applicable: false,
+        reason: 'No "Row Order" column found — cannot tell assemblies from parts.',
         boughtOut: imQc.boughtOutParts(im),
       };
     }
@@ -221,7 +240,7 @@
 
     return {
       applicable: true,
-      cadSourceFileName: cad.source.fileName || '',
+      cadSourceFileName: cad.sources.map(function (s) { return s.fileName || ''; }).filter(Boolean).join(', '),
       mismatches: mismatches,
       boughtOut: boughtOut,
     };

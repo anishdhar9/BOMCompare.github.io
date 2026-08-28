@@ -199,6 +199,26 @@
     renderChangedTab();
   }
 
+  // Column presence disagreeing between the two files is the specific risk
+  // worth calling out here: if BOTH files consistently lack a column,
+  // there's nothing to compare and nothing spurious happens (e.g. an absent
+  // Revision on both sides compares '' === '' -> no false mismatch); it's
+  // only when one file HAS a column the other doesn't that every shared
+  // part looks like it changed on that field -- or, in the ECR panel, gets
+  // a full Drg. Revised/Drg. Obsolete pair it doesn't really deserve. This
+  // is deliberately narrower than surfacing each file's own `warnings`
+  // array unconditionally (below): most real exports simply don't carry
+  // every optional column, and every dependent check already reports its
+  // own graceful "not applicable" for that, same as the main tool — a
+  // one-sided "no Material column" note on every normal upload would just
+  // be noise. A two-sided MISMATCH is the part actually worth a warning.
+  const COLUMN_MISMATCH_CHECKS = [
+    ['hasPaths', 'Row Order (hierarchy)'],
+    ['hasRevision', 'Revision'],
+    ['hasMaterial', 'Material'],
+    ['hasState', 'State'],
+  ];
+
   function runDiff() {
     $('notices').innerHTML = '';
     if (!state.old || !state.new) return;
@@ -209,6 +229,15 @@
       notice('warn', 'The two files carry different SPN/PN project keys (' + state.old.projectKey.pn + ' vs ' +
         state.new.projectKey.pn + ') — check this is really the same BOM at two points in time.');
     }
+    COLUMN_MISMATCH_CHECKS.forEach(function (chk) {
+      const key = chk[0], label = chk[1];
+      if (!!state.old[key] === !!state.new[key]) return;
+      const has = state.old[key] ? 'the older file' : 'the newer file';
+      notice('warn', 'Only ' + has + ' has a "' + label + '" column — every shared part will look like it changed on that ' +
+        'field, since there is nothing on the other side to compare against.');
+    });
+    (state.old.warnings || []).forEach(function (w) { notice('warn', 'Older file: ' + w); });
+    (state.new.warnings || []).forEach(function (w) { notice('warn', 'Newer file: ' + w); });
     state.diff = BC.imDiffCompare.diffItemMasters(state.old, state.new, BC.indexItemMaster, BC.materialCompare.materialsMatch);
     $('results').classList.remove('hidden');
     renderResults();
@@ -219,7 +248,7 @@
   /* ----- ECR sheet ----- */
 
   function ecrOptions() {
-    return { cascadeIntoNewSubtrees: $('ecr-cascade').checked };
+    return { cascadeIntoNewSubtrees: $('ecr-cascade').checked, materialsMatch: BC.materialCompare.materialsMatch };
   }
 
   function renderEcrSummary() {
@@ -243,8 +272,9 @@
     if (state.ecr.otherChanges.length) {
       const preview = state.ecr.otherChanges.slice(0, 20).map(function (c) { return c.number + ' (' + c.fields.join(', ') + ')'; }).join('; ');
       const more = state.ecr.otherChanges.length > 20 ? ', and ' + (state.ecr.otherChanges.length - 20) + ' more' : '';
-      otherBox.textContent = state.ecr.otherChanges.length + ' part(s) have a Material, Title, Description, or State change ' +
-        'with no Quantity or Revision change, so there is no matching ECR Action code for them: ' + preview + more +
+      otherBox.textContent = state.ecr.otherChanges.length + ' part(s) have a change with no matching ECR Action code — ' +
+        'a Material, Title, Description, or State change with no Quantity/Revision change alongside it, or (shown as ' +
+        '"Quantity" below) a Quantity change that could not also be represented on a revision-bump row: ' + preview + more +
         '. Review these in the Changed tab above and add them to the ECR sheet by hand if needed.';
       otherBox.classList.remove('hidden');
     } else {

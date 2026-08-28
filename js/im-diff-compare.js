@@ -42,6 +42,17 @@
     return Math.abs(a - b) < 1e-9;
   }
 
+  // True when every occurrence of a PN agrees on `getter`'s field, per `eq`.
+  // A part reused under several parents is normal (unlike Quantity, these
+  // descriptive fields are properties of the item, not its usage context),
+  // so this is almost always true — it only trips on the rare case
+  // imqc.js's own Check 7 exists to catch (the same PN carrying
+  // inconsistent Revision/etc. across positions within ONE file).
+  function allOccurrencesAgree(rows, getter, eq) {
+    for (let i = 1; i < rows.length; i++) if (!eq(getter(rows[0]), getter(rows[i]))) return false;
+    return true;
+  }
+
   function fmtQty(v) {
     if (v === null || v === undefined) return '(blank)';
     return Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : String(Math.round(v * 1000) / 1000);
@@ -71,16 +82,36 @@
       const row = oldIndex.byNumber.get(pn)[0];
       removed.push({ number: row.number, title: row.title || '', description: row.description || '', sourceRow: row.sourceRow || '' });
     }
+    const materialsEq = function (a, b) { return a === b || (materialsMatch ? materialsMatch(a, b) : false); };
+
     for (const pn of oldPNs) {
       if (!newPNs.has(pn)) continue;
-      const oldRow = oldIndex.byNumber.get(pn)[0];
-      const newRow = newIndex.byNumber.get(pn)[0];
+      // A reused part occurs at several positions — ALL of them, not just
+      // the first in file order, since a real change at a non-first
+      // occurrence must not be masked by an earlier, unchanged one.
+      const oldRows = oldIndex.byNumber.get(pn);
+      const newRows = newIndex.byNumber.get(pn);
+      const oldRow = oldRows[0];
+      const newRow = newRows[0];
       const fields = [];
 
-      if (!qtyEqual(oldRow.qty, newRow.qty)) {
-        fields.push({ field: 'Quantity', old: fmtQty(oldRow.qty), new: fmtQty(newRow.qty) });
+      // Quantity is legitimately per-position (that's the whole point of a
+      // BOM quantity), so comparing a single occurrence's raw value can
+      // never be right for a reused part — compare the same rolled-up
+      // total indexItemMaster() already computes for the main CAD-vs-IM
+      // tool (own qty x product of ancestor quantities, summed over every
+      // occurrence). Falls back to the row's own qty for a PN indexItemMaster
+      // never totals (the Item Master's own root row, whose Quantity is a
+      // literal '-' placeholder, not a real per-part total).
+      const oldQty = oldIndex.totals.has(pn) ? oldIndex.totals.get(pn) : oldRow.qty;
+      const newQty = newIndex.totals.has(pn) ? newIndex.totals.get(pn) : newRow.qty;
+      if (!qtyEqual(oldQty, newQty)) {
+        fields.push({ field: 'Quantity', old: fmtQty(oldQty), new: fmtQty(newQty) });
       }
-      if (!revEqual(oldRow.revision, newRow.revision)) {
+
+      const revisionConsistent = allOccurrencesAgree(oldRows, function (r) { return r.revision; }, revEqual) &&
+        allOccurrencesAgree(newRows, function (r) { return r.revision; }, revEqual);
+      if (!revisionConsistent || !revEqual(oldRow.revision, newRow.revision)) {
         fields.push({ field: 'Revision', old: normStr(oldRow.revision), new: normStr(newRow.revision) });
       }
       // Raw equality is checked FIRST and short-circuits materialsMatch: that
@@ -90,18 +121,26 @@
       // (e.g. both sides literally "-") as "changed" once stripped to "".
       const oldMat = normStr(oldRow.material);
       const newMat = normStr(newRow.material);
+      const materialConsistent = allOccurrencesAgree(oldRows, function (r) { return normStr(r.material); }, materialsEq) &&
+        allOccurrencesAgree(newRows, function (r) { return normStr(r.material); }, materialsEq);
       let materialsDiffer = oldMat !== newMat;
       if (materialsDiffer && materialsMatch) materialsDiffer = !materialsMatch(oldMat, newMat);
-      if (materialsDiffer) {
+      if (!materialConsistent || materialsDiffer) {
         fields.push({ field: 'Material', old: oldMat, new: newMat });
       }
-      if (normStr(oldRow.title) !== normStr(newRow.title)) {
+      const titleConsistent = allOccurrencesAgree(oldRows, function (r) { return normStr(r.title); }, function (a, b) { return a === b; }) &&
+        allOccurrencesAgree(newRows, function (r) { return normStr(r.title); }, function (a, b) { return a === b; });
+      if (!titleConsistent || normStr(oldRow.title) !== normStr(newRow.title)) {
         fields.push({ field: 'Title', old: normStr(oldRow.title), new: normStr(newRow.title) });
       }
-      if (normStr(oldRow.description) !== normStr(newRow.description)) {
+      const descConsistent = allOccurrencesAgree(oldRows, function (r) { return normStr(r.description); }, function (a, b) { return a === b; }) &&
+        allOccurrencesAgree(newRows, function (r) { return normStr(r.description); }, function (a, b) { return a === b; });
+      if (!descConsistent || normStr(oldRow.description) !== normStr(newRow.description)) {
         fields.push({ field: 'Description', old: normStr(oldRow.description), new: normStr(newRow.description) });
       }
-      if (normStr(oldRow.state) !== normStr(newRow.state)) {
+      const stateConsistent = allOccurrencesAgree(oldRows, function (r) { return normStr(r.state); }, function (a, b) { return a === b; }) &&
+        allOccurrencesAgree(newRows, function (r) { return normStr(r.state); }, function (a, b) { return a === b; });
+      if (!stateConsistent || normStr(oldRow.state) !== normStr(newRow.state)) {
         fields.push({ field: 'State', old: normStr(oldRow.state), new: normStr(newRow.state) });
       }
 

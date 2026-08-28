@@ -22,6 +22,7 @@ const { compare, compareAll, countDescendants, indexItemMaster, normNumber, grou
 const { itemMasterParser } = require(path.join(rootDir, 'js/parsers/itemmaster.js'));
 const { cadFlatParser } = require(path.join(rootDir, 'js/parsers/cad-flat-xlsx.js'));
 const { cadLeveledParser } = require(path.join(rootDir, 'js/parsers/cad-leveled.js'));
+const { qtyParse } = require(path.join(rootDir, 'js/parsers/qty-parse.js'));
 const { detect } = require(path.join(rootDir, 'js/parsers/detect.js'));
 const { imQc } = require(path.join(rootDir, 'js/imqc.js'));
 const { materialCompare } = require(path.join(rootDir, 'js/material-compare.js'));
@@ -201,6 +202,42 @@ console.log('\n== synthetic: Item Master diff (diffItemMasters) ==');
   const dashDiff = imDiffCompare.diffItemMasters(imDashOld, imDashNew, indexItemMaster, materialCompare.materialsMatch);
   check('identical "-" placeholder material on both sides is NOT flagged as changed',
     !dashDiff.changed.some(c => c.number === 'PART-DASH'), dashDiff.changed);
+
+  // Regression: a non-Quantity field (Revision here) changing at a
+  // non-first occurrence must not be masked by an earlier, unchanged one --
+  // the same class of bug as the SHARED-PART Quantity case above, but for
+  // the "all occurrences must agree" fields. REUSED-PART sits under both
+  // PARENT-A (Revision unchanged, "0"->"0") and PARENT-B (Revision bumped,
+  // "0"->"1"); PARENT-A comes first in file order.
+  const revHeader = ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity', 'Revision'];
+  const revOldAoa = [
+    revHeader,
+    ['MACH-01', '-', 'Machine', 'desc', '-', '0'],
+    ['PARENT-A', '1', 'Parent A', 'desc', '1 Each', '0'],
+    ['REUSED-PART', '1.1', 'Reused Part', 'desc', '1 Each', '0'],
+    ['PARENT-B', '2', 'Parent B', 'desc', '1 Each', '0'],
+    ['REUSED-PART', '2.1', 'Reused Part', 'desc', '1 Each', '0'],
+  ];
+  const revNewAoa = [
+    revHeader,
+    ['MACH-01', '-', 'Machine', 'desc', '-', '0'],
+    ['PARENT-A', '1', 'Parent A', 'desc', '1 Each', '0'],
+    ['REUSED-PART', '1.1', 'Reused Part', 'desc', '1 Each', '0'],
+    ['PARENT-B', '2', 'Parent B', 'desc', '1 Each', '0'],
+    ['REUSED-PART', '2.1', 'Reused Part', 'desc', '1 Each', '1'],
+  ];
+  const revOld = parse(revOldAoa);
+  const revNew = parse(revNewAoa);
+  const revDiff = imDiffCompare.diffItemMasters(revOld, revNew, indexItemMaster);
+  const reusedChange = revDiff.changed.find(c => c.number === 'REUSED-PART');
+  check('a Revision change at the second occurrence of a reused part is not masked by the first, unchanged one',
+    !!reusedChange && reusedChange.fields.some(f => f.field === 'Revision'), revDiff.changed.map(c => c.number));
+
+  // And the negative case: internally CONSISTENT data (every occurrence
+  // agrees on both sides) must not be flagged just because the part repeats.
+  const consistentDiff = imDiffCompare.diffItemMasters(revOld, revOld, indexItemMaster);
+  check('a reused part with no real change (old vs old) is not flagged, despite repeating',
+    !consistentDiff.changed.some(c => c.number === 'REUSED-PART'), consistentDiff.changed.map(c => c.number));
 }
 
 console.log('\n== synthetic: ECR sheet generation (diffForEcr / fillEcrTemplate) ==');
@@ -316,6 +353,73 @@ console.log('\n== synthetic: ECR sheet generation (diffForEcr / fillEcrTemplate)
   } else {
     console.log('\n(vendor/ECR_template.xlsx not found — skipped the template-fill check)');
   }
+
+  // Same SHARED-PART regression, but against the TOP diff (diffItemMasters),
+  // not just diffForEcr — this is the primary Added/Removed/Changed view and
+  // its .xlsx export, and it used to compare only byNumber.get(pn)[0] (the
+  // PARENT-A occurrence, unchanged 3->3), completely missing the real 5->7
+  // change under PARENT-B.
+  const topDiff = imDiffCompare.diffItemMasters(imOld, imNew, indexItemMaster);
+  const sharedChange = topDiff.changed.find(c => c.number === 'SHARED-PART');
+  check('top diff: SHARED-PART IS reported as changed (previously silently missed)', !!sharedChange, topDiff.changed.map(c => c.number));
+  check('top diff: SHARED-PART\'s Quantity uses the rolled-up total (3+5=8 -> 3+7=10), not either single occurrence',
+    sharedChange && sharedChange.fields.some(f => f.field === 'Quantity' && f.old === '8' && f.new === '10'), sharedChange && sharedChange.fields);
+}
+
+console.log('\n== synthetic: ECR co-occurring field changes are routed to otherChanges, not silently dropped ==');
+{
+  const header = ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity', 'Revision', 'Material', 'State'];
+  const oldAoa = [
+    header,
+    ['MACH-01', '-', 'Machine', 'desc', '-', '0', '', 'Certified'],
+    ['PART-REVQTY', '1', 'Revision + Qty', 'desc', '2 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-REVMAT', '2', 'Revision + Material', 'desc', '1 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-QTYMAT', '3', 'Qty + Material (no revision change)', 'desc', '2 Each', '0', 'AISI 304', 'Certified'],
+    ['PART-REVGRADE', '4', 'Revision + naming-convention-only material', 'desc', '1 Each', '0', '1.4301', 'Certified'],
+  ];
+  const newAoa = [
+    header,
+    ['MACH-01', '-', 'Machine', 'desc', '-', '0', '', 'Certified'],
+    ['PART-REVQTY', '1', 'Revision + Qty', 'desc', '4 Each', '1', 'AISI 304', 'Certified'],
+    ['PART-REVMAT', '2', 'Revision + Material', 'desc', '1 Each', '1', 'AISI 316', 'Certified'],
+    ['PART-QTYMAT', '3', 'Qty + Material (no revision change)', 'desc', '5 Each', '0', 'AISI 316', 'Certified'],
+    ['PART-REVGRADE', '4', 'Revision + naming-convention-only material', 'desc', '1 Each', '1', 'AISI 304', 'Certified'],
+  ];
+  const parseEcrCo = (aoa) => itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, { utils: { sheet_to_json: () => aoa } });
+  const imOld = parseEcrCo(oldAoa);
+  const imNew = parseEcrCo(newAoa);
+
+  const ecr = ecrFill.diffForEcr(imOld, imNew, indexItemMaster);
+
+  const revQtyRows = ecr.rows.filter(r => r.itemNoWithRev.indexOf('PART-REVQTY') === 0);
+  check('Revision+Qty: still gets its revision-bump pair (2 rows)', revQtyRows.length === 2, revQtyRows);
+  const revQtyOther = ecr.otherChanges.find(c => c.number === 'PART-REVQTY');
+  check('Revision+Qty: the real quantity change (2->4) is NOT silently dropped -- routed to otherChanges',
+    !!revQtyOther && revQtyOther.fields.includes('Quantity'), ecr.otherChanges);
+
+  const revMatOther = ecr.otherChanges.find(c => c.number === 'PART-REVMAT');
+  check('Revision+Material: the material change is routed to otherChanges alongside the revision-bump pair',
+    !!revMatOther && revMatOther.fields.includes('Material') && !revMatOther.fields.includes('Quantity'), ecr.otherChanges);
+  const revMatRows = ecr.rows.filter(r => r.itemNoWithRev.indexOf('PART-REVMAT') === 0);
+  check('Revision+Material: still gets its revision-bump pair too', revMatRows.length === 2, revMatRows);
+
+  const qtyMatRow = ecr.rows.find(r => r.action === 'Qty Changed' && r.itemNoWithRev === 'PART-QTYMAT');
+  check('Qty+Material (no revision change): still gets its ordinary Qty Changed row', !!qtyMatRow, ecr.rows);
+  const qtyMatOther = ecr.otherChanges.find(c => c.number === 'PART-QTYMAT');
+  check('Qty+Material: the material change is ALSO routed to otherChanges, not dropped (this case was already broken pre-fix too)',
+    !!qtyMatOther && qtyMatOther.fields.includes('Material') && !qtyMatOther.fields.includes('Quantity'), ecr.otherChanges);
+
+  // materialsMatch reuse: PART-REVGRADE's material "changed" (1.4301 -> AISI
+  // 304) is only a DIN/AISI naming-convention difference, the same grade.
+  const noMatch = ecrFill.diffForEcr(imOld, imNew, indexItemMaster);
+  check('without materialsMatch injected, the naming-convention-only difference IS reported (raw text differs)',
+    noMatch.otherChanges.some(c => c.number === 'PART-REVGRADE' && c.fields.includes('Material')), noMatch.otherChanges);
+  const withMatch = ecrFill.diffForEcr(imOld, imNew, indexItemMaster, { materialsMatch: materialCompare.materialsMatch });
+  check('with materialsMatch injected, the naming-convention-only difference is NOT reported (same grade, matches the top diff\'s behavior)',
+    !withMatch.otherChanges.some(c => c.number === 'PART-REVGRADE' && c.fields.includes('Material')), withMatch.otherChanges);
+  const revGradeRows = withMatch.rows.filter(r => r.itemNoWithRev.indexOf('PART-REVGRADE') === 0);
+  check('PART-REVGRADE still gets its revision-bump pair regardless of the material normalization',
+    revGradeRows.length === 2, revGradeRows);
 }
 
 console.log('\n== synthetic: positional ancestor resolution (duplicate Row Order positions) ==');
@@ -629,6 +733,98 @@ console.log('\n== synthetic: quantity-cascade detection (detectQuantityCascades)
       res.qtyMismatches.some(m => m.number === n && m.cadQty === 1 && m.imQty === 2)));
 }
 
+console.log('\n== synthetic: a blank/\'-\' ancestor Quantity poisons the IM rolled-up total (not treated as x1) ==');
+{
+  // ASSY-A's own Quantity is blank -- PART-B's true rolled-up total is not
+  // computable, and must come back null, not silently "3" as if ASSY-A's
+  // missing multiplier were 1. cadTotals() already gets this right; this is
+  // the same contract on the Item Master side of indexItemMaster().
+  const im = {
+    rows: [
+      { number: 'MACH-01', title: 'Machine', qty: null, path: [] },
+      { number: 'ASSY-A', title: 'Assembly A', qty: null, path: ['1'] },
+      { number: 'PART-B', title: 'Part B', qty: 3, path: ['1', '1'] },
+    ],
+  };
+  const idx = indexItemMaster(im);
+  check('PART-B rolled-up total is null (not computable), not silently 3',
+    idx.totals.get('PART-B') === null, idx.totals.get('PART-B'));
+  check('PART-B\'s breakdown still records the raw qty and a null effQty (not silently 3)',
+    idx.breakdowns.get('PART-B')[0].qty === 3 && idx.breakdowns.get('PART-B')[0].effQty === null,
+    idx.breakdowns.get('PART-B'));
+}
+
+console.log('\n== synthetic: quantity-cascade nested-candidate pruning survives a duplicate Row Order position ==');
+{
+  // ASSY-REAL and ASSY-SHADOW both sit at Row Order '2' (a real, observed
+  // export defect -- see buildParentIndex()'s own comment). ASSY-REAL is a
+  // genuine cascade candidate (its own 2 direct children both at a clean 2x).
+  // CHILD-UNDER-SHADOW's path ('2.1') is a string-prefix match for BOTH
+  // '2' (ASSY-REAL) and '2' (ASSY-SHADOW), but it is positionally a child of
+  // ASSY-SHADOW only (came later in file order, so buildParentIndex's stack
+  // walk attributes it there) -- it must NOT be silently swallowed into
+  // ASSY-REAL's cascade subtree just because its path string starts with '2'.
+  const cadAoa = [
+    ['Item', 'Number', 'Title', 'QTY'],
+    ['1', 'MACH-01', 'Machine', '1'],
+    ['1.1', 'ASSY-REAL', 'Assembly Real', '1'],
+    ['1.1.1', 'RC-1', 'Real Child 1', '1'],
+    ['1.1.2', 'RC-2', 'Real Child 2', '1'],
+    ['1.2', 'ASSY-SHADOW', 'Assembly Shadow', '1'],
+    ['1.2.1', 'CHILD-UNDER-SHADOW', 'Shadow Child', '1'],
+  ];
+  const cad = cadLeveledParser.parse(cadAoa, { source: 'leveled-sheet' });
+  const im = {
+    rows: [
+      { number: 'MACH-01', title: 'Machine', qty: null, path: [] },
+      { number: 'ASSY-REAL', title: 'Assembly Real', qty: 1, path: ['1'] },
+      { number: 'RC-1', title: 'Real Child 1', qty: 2, path: ['1', '1'] },
+      { number: 'RC-2', title: 'Real Child 2', qty: 2, path: ['1', '2'] },
+      // Duplicate position '2' -- a different row, positionally under
+      // ASSY-REAL by file/stack order, NOT a sibling of ASSY-REAL.
+      { number: 'ASSY-SHADOW', title: 'Assembly Shadow', qty: 1, path: ['2'] },
+      { number: 'CHILD-UNDER-SHADOW', title: 'Shadow Child', qty: 1, path: ['2', '1'] },
+    ],
+  };
+  const res = compare(cad, im);
+  check('ASSY-REAL is still found as a cascade root', res.qtyCascades.roots.some(r => r.item.number === 'ASSY-REAL'),
+    res.qtyCascades.roots.map(r => r.item.number));
+  const realRoot = res.qtyCascades.roots.find(r => r.item.number === 'ASSY-REAL');
+  check('CHILD-UNDER-SHADOW (positionally under ASSY-SHADOW, not ASSY-REAL) is NOT swept into ASSY-REAL\'s cascade subtree',
+    !!realRoot && !(function contains(n) { return n.item.number === 'CHILD-UNDER-SHADOW' || n.children.some(contains); })(realRoot),
+    realRoot);
+}
+
+console.log('\n== synthetic: Quantity Cascades are suppressible via the Ignore List, like every sibling check ==');
+{
+  const cadAoa = [
+    ['Item', 'Number', 'Title', 'QTY'],
+    ['1', 'MACH-01', 'Machine', '1'],
+    ['1.1', 'ASSY-P', 'Assembly P', '1'],
+    ['1.1.1', 'CHILD-1', 'Child 1', '1'],
+    ['1.1.2', 'CHILD-2', 'Child 2', '1'],
+  ];
+  const cad = cadLeveledParser.parse(cadAoa, { source: 'leveled-sheet' });
+  const im = {
+    rows: [
+      { number: 'MACH-01', title: 'Machine', qty: null, path: [] },
+      { number: 'ASSY-P', title: 'Assembly P', qty: 1, path: ['1'] },
+      { number: 'CHILD-1', title: 'Child 1', qty: 2, path: ['1', '1'] },
+      { number: 'CHILD-2', title: 'Child 2', qty: 2, path: ['1', '2'] },
+    ],
+  };
+  const idxIgnore = ignoreListCompare.buildIgnoreIndex({
+    rows: [{ number: 'ASSY-P', from: 'Quantity mismatch', sourceRow: 2 }],
+  });
+  check('"quantity mismatch" From-category now also covers qtyCascade', idxIgnore.isIgnored('ASSY-P', 'qtyCascade'));
+  const resIgnored = compareAll([cad], im, { isIgnored: idxIgnore.isIgnored });
+  check('ASSY-P cascade root is suppressed by the Ignore List',
+    !resIgnored.qtyCascades.roots.some(r => r.item.number === 'ASSY-P'), resIgnored.qtyCascades.roots.map(r => r.item.number));
+  const resPlain = compareAll([cad], im);
+  check('without an ignore predicate, ASSY-P cascade is reported as usual (backward compatible)',
+    resPlain.qtyCascades.roots.some(r => r.item.number === 'ASSY-P'), resPlain.qtyCascades.roots.map(r => r.item.number));
+}
+
 console.log('\n== synthetic: leveled CAD parsing captures Material column ==');
 {
   const aoaWithMaterial = [
@@ -649,6 +845,104 @@ console.log('\n== synthetic: leveled CAD parsing captures Material column ==');
   check('hasMaterial false when no Material column exists', cadNoMat.hasMaterial === false, cadNoMat.hasMaterial);
   check('werkstoff (German) recognized as a material header',
     cadLeveledParser.parse([['Number', 'Werkstoff'], ['PART-A', 'AISI 316']], { source: 'leveled-sheet' }).hasMaterial === true);
+}
+
+console.log('\n== synthetic: qtyParse.parseQty() is locale-aware (thousands vs decimal separators) ==');
+{
+  // Existing, must-stay-correct behavior.
+  check('"4 Each" -> 4', qtyParse.parseQty('4 Each') === 4);
+  check('"16" -> 16', qtyParse.parseQty('16') === 16);
+  check('"-" -> null', qtyParse.parseQty('-') === null);
+  check('"" -> null', qtyParse.parseQty('') === null);
+  check('null -> null', qtyParse.parseQty(null) === null);
+  check('a lone decimal comma: "1,5" -> 1.5', qtyParse.parseQty('1,5') === 1.5);
+  check('an ordinary decimal dot: "4.5" -> 4.5', qtyParse.parseQty('4.5') === 4.5);
+
+  // The actual bug: a thousands-grouped value in either convention.
+  check('EU thousands + decimal: "1.234,5" -> 1234.5 (was 1.234, off by ~1000x)',
+    qtyParse.parseQty('1.234,5') === 1234.5, qtyParse.parseQty('1.234,5'));
+  check('US thousands + decimal: "1,234.5" -> 1234.5',
+    qtyParse.parseQty('1,234.5') === 1234.5, qtyParse.parseQty('1,234.5'));
+  check('US thousands, comma only: "1,200 Nos." -> 1200 (was 1, LLDBO\'s old parseQty had no comma handling at all)',
+    qtyParse.parseQty('1,200 Nos.') === 1200, qtyParse.parseQty('1,200 Nos.'));
+  check('EU thousands, dot only: "1.234" -> 1234 (was 1.234, off by >1000x, no warning either way)',
+    qtyParse.parseQty('1.234') === 1234, qtyParse.parseQty('1.234'));
+  check('repeated thousands groups: "12,345,678" -> 12345678', qtyParse.parseQty('12,345,678') === 12345678);
+  check('repeated thousands groups (EU): "12.345.678" -> 12345678', qtyParse.parseQty('12.345.678') === 12345678);
+  check('negative still supported: "-4" -> -4', qtyParse.parseQty('-4') === -4);
+
+  // End-to-end: all three parsers that share qtyParse now agree.
+  const cadQty = cadLeveledParser.parse(
+    [['Item', 'Number', 'QTY'], ['1', 'PART-A', '1.234']], { source: 'leveled-sheet' });
+  check('cad-leveled.js: "1.234" resolves to 1234, not 1.234', cadQty.items[0].qty === 1234, cadQty.items[0].qty);
+
+  const imQtyAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)', 'Quantity'],
+    ['PART-A', '1', 'Part A', 'desc', '1.234'],
+  ];
+  const imQty = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => imQtyAoa } });
+  check('itemmaster.js: "1.234" resolves to 1234, not 1.234', imQty.rows[0].qty === 1234, imQty.rows[0].qty);
+
+  const lldboAoa = [
+    ['Glatt Systems Pvt Ltd.', '', 'DBO Doc No : SPN000999_PN33445_TEST MACHINE', '', '', '', '', ''],
+    ['SR. No', 'PART NO', 'Item Description', 'Specifications', 'Make', 'Qty.', 'Remarks'],
+    ['', 'X-999-00001', 'Motor', 'spec', 'MAKE', '1,200 Nos.', ''],
+  ];
+  const lldbo = lldboParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => lldboAoa } });
+  check('lldbo.js: "1,200 Nos." resolves to 1200, not 1 (previously had no comma handling at all)',
+    !!lldbo && lldbo.rows[0].qty === 1200, lldbo && lldbo.rows[0]);
+}
+
+console.log('\n== synthetic: matchField() longest-prefix-wins (mirrors itemmaster.js\'s fix for the same bug) ==');
+{
+  check('"Item Description" matches description, not the bare "item" prefix under pos',
+    cadLeveledParser.matchField('Item Description') === 'description', cadLeveledParser.matchField('Item Description'));
+  check('"Qty Per Unit" matches the unit decoy, not the bare "qty" prefix',
+    cadLeveledParser.matchField('Qty Per Unit') === 'unit', cadLeveledParser.matchField('Qty Per Unit'));
+  check('"Quantity Per Unit" matches the unit decoy too',
+    cadLeveledParser.matchField('Quantity Per Unit') === 'unit', cadLeveledParser.matchField('Quantity Per Unit'));
+  check('plain "Item" still matches pos (no false "item description" collision on a short header)',
+    cadLeveledParser.matchField('Item') === 'pos', cadLeveledParser.matchField('Item'));
+
+  const withItemDesc = cadLeveledParser.parse(
+    [['Item', 'Number', 'Item Description'], ['1', 'PART-A', 'Real free text']], { source: 'leveled-sheet' });
+  check('end-to-end: an "Item Description" column is captured into item.description, not lost',
+    withItemDesc.items[0].description === 'Real free text', withItemDesc.items[0].description);
+
+  const onlyPerUnit = cadLeveledParser.parse(
+    [['Item', 'Number', 'Qty Per Unit'], ['1', 'PART-A', '1']], { source: 'leveled-sheet' });
+  check('end-to-end: a lone "Qty Per Unit" column (no real Qty column) is NOT captured as item.qty',
+    onlyPerUnit.items[0].qty === null, onlyPerUnit.items[0].qty);
+  check('end-to-end: hasQty is false when the only quantity-shaped column is per-unit',
+    onlyPerUnit.hasQty === false, onlyPerUnit.hasQty);
+
+  const realQtyWins = cadLeveledParser.parse(
+    [['Item', 'Number', 'QTY', 'Qty Per Unit'], ['1', 'PART-A', '4', '1']], { source: 'leveled-sheet' });
+  check('end-to-end: a genuine QTY column still wins when both it and Qty Per Unit are present',
+    realQtyWins.items[0].qty === 4, realQtyWins.items[0].qty);
+}
+
+console.log('\n== synthetic: a blank Level/Position cell mid-file carries forward, not top-of-tree ==');
+{
+  // PART-B's Level cell is blank -- a real data gap, not "back to the root".
+  // It sits between two level-2 rows and should carry forward as level 2,
+  // not silently become level 1 (which would falsely make it a top-level
+  // sibling of PART-A's parent and corrupt grouping for everything after it).
+  const aoa = [
+    ['Level', 'Number', 'Title'],
+    ['1', 'ASSY-A', 'Top assembly'],
+    ['2', 'PART-A', 'First child'],
+    ['', 'PART-B', 'Gap — should carry forward as level 2'],
+    ['2', 'PART-C', 'Third child'],
+  ];
+  const cad = cadLeveledParser.parse(aoa, { source: 'leveled-sheet' });
+  const byNum = Object.fromEntries(cad.items.map(it => [it.number, it]));
+  check('PART-B carries forward the previous row\'s level (2), not top-of-tree (1)',
+    byNum['PART-B'].level === 2, byNum['PART-B'].level);
+  check('a warning is emitted for the carried-forward gap',
+    cad.warnings.some(w => /blank Level\/Position/.test(w)), cad.warnings);
+  check('PART-A and PART-C are unaffected (still level 2)',
+    byNum['PART-A'].level === 2 && byNum['PART-C'].level === 2);
 }
 
 console.log('\n== synthetic: leveled CAD parsing captures Thumbnail column ==');
@@ -1178,6 +1472,41 @@ console.log('\n== synthetic: reference items (structure vs intended BOM) ==');
   check('qty taken from bom source', res.hasQty === true);
 }
 
+console.log('\n== synthetic: a CAD-shaped upload dropped on the Item Master zone gets a warning, not silent acceptance ==');
+{
+  // The exact reproduction: this header is minimal enough that itemmaster.js
+  // has nothing IM-specific to reject it on (score 3: number/title/qty all
+  // match), so it parses "successfully" as an Item Master even though it's
+  // really a CAD BOM export.
+  const cadShapedAoa = [
+    ['Item', 'Number', 'Title', 'QTY', 'File'],
+    ['1', 'PART-A', 'Part A', '1', 'a.ipt'],
+  ];
+  check('detect.looksLikeCad recognizes the File column', detect.looksLikeCad(cadShapedAoa) === true);
+  const asIm = detect.parseItemMasterFromWorkbook({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => cadShapedAoa } });
+  check('it still parses (this is the actual bug: nothing rejects it outright)', !!asIm, asIm);
+  check('but is flagged cadShaped so app.js can warn instead of silently trusting it', asIm && asIm.cadShaped === true, asIm);
+
+  // A genuine Item Master export (no File/Thumbnail/BOM Structure columns)
+  // must NOT trip the same warning — this would otherwise nag on every
+  // ordinary upload.
+  const genuineImAoa = [
+    ['Row Order', 'Part Number', 'Description (Item,CO)', 'Title (Item,CO)', 'Qty'],
+    ['-', 'MACH-01', 'desc', 'Machine', '-'],
+    ['1', 'PART-A', 'desc', 'Part A', '3'],
+  ];
+  check('detect.looksLikeCad does not false-positive on a genuine Item Master header', detect.looksLikeCad(genuineImAoa) === false);
+  const genuineIm = detect.parseItemMasterFromWorkbook({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => genuineImAoa } });
+  check('genuine Item Master upload is not flagged cadShaped', genuineIm && !genuineIm.cadShaped, genuineIm);
+
+  // A real Inventor BOM export dropped on the CAD zone (the case that
+  // motivated the fix in the first place) must still be recognized as CAD,
+  // unaffected by this change.
+  const realCad = cadLeveledParser.parse(
+    [['Item', 'Number', 'Title', 'BOM Structure', 'QTY'], ['1', 'PART-A', 'Part A', 'Normal', '1']], { source: 'leveled-sheet' });
+  check('a genuine leveled CAD export still parses fine as CAD (unaffected by this fix)', !!realCad && realCad.items.length === 1, realCad);
+}
+
 console.log('\n== synthetic: Item Master QC checks ==');
 {
   // header includes Producer / Producer Number / Entity Icon so all 4 checks
@@ -1189,7 +1518,9 @@ console.log('\n== synthetic: Item Master QC checks ==');
     ['PART-A', '1.1', 'Part A', 'desc', '2 Each', '2', '', '', 'Normal'],
     ['PART-B', '1.2', 'Part B (qty edited, Item Qty stale)', 'desc', '5 Each', '3', '', '', 'Normal'],
     ['PART-C', '1.3', 'Part C (bad icon)', 'desc', '1 Each', '1', '', '', 'Reference'],
-    ['7-909-00002', '1.4', 'not really end of line but matches text END OF LINE', 'desc', '1 Each', '1', '', '', 'Normal'],
+    // A real part whose Title merely CONTAINS "END OF LINE" as a substring
+    // (not an exact match) -- must NOT be mistaken for the sentinel row.
+    ['7-100-00099', '1.4', 'Sensor - End of Line Detector', 'desc', '1 Each', '1', '', '', 'Normal'],
   ];
   const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
     utils: { sheet_to_json: () => aoa },
@@ -1220,7 +1551,20 @@ console.log('\n== synthetic: Item Master QC checks ==');
     qcPartial.c1.fail[0].issue.indexOf('Producer "GLATT" not found') !== -1 &&
     qcPartial.c1.fail[0].issue.indexOf('Producer Number') === -1,
     qcPartial.c1.fail[0] && qcPartial.c1.fail[0].issue);
-  check('c2 flags the second "END OF LINE"-text row with wrong number', qc.c2.found === 2 && qc.c2.fail.length === 1 && qc.c2.fail[0].number === '7-909-00002', qc.c2);
+  check('c2: only the exact "END OF LINE" row is recognized as the sentinel — the real part whose title merely CONTAINS the phrase is not swept in',
+    qc.c2.found === 1 && qc.c2.fail.length === 0, qc.c2);
+  check('isEndOfLine false positive fixed: the real "Sensor - End of Line Detector" part is not flagged by c2',
+    !qc.c2.fail.some(f => f.number === '7-100-00099'), qc.c2.fail);
+  check('isEndOfLine false negative fixed: that same real part is still checked by c3 (qty edited correctly here, so it passes rather than being silently skipped)',
+    !qc.c3.fail.some(f => f.number === '7-100-00099'), qc.c3.fail);
+
+  check('isEndOfLine(): exact title match', imQc.isEndOfLine({ title: 'END OF LINE', description: '' }) === true);
+  check('isEndOfLine(): exact description match', imQc.isEndOfLine({ title: '', description: 'End Of Line' }) === true);
+  check('isEndOfLine(): trims surrounding whitespace', imQc.isEndOfLine({ title: '  END OF LINE  ', description: '' }) === true);
+  check('isEndOfLine(): a title that only CONTAINS the phrase no longer matches',
+    imQc.isEndOfLine({ title: 'Sensor - End of Line Detector', description: '' }) === false);
+  check('isEndOfLine(): concatenation across title+description no longer matches either',
+    imQc.isEndOfLine({ title: 'END OF', description: 'LINE' }) === false);
   check('c3 flags PART-B only', qc.c3.applicable === true && qc.c3.fail.length === 1 && qc.c3.fail[0].number === 'PART-B', qc.c3.fail);
   check('c4 flags PART-C only', qc.c4.applicable === true && qc.c4.fail.length === 1 && qc.c4.fail[0].number === 'PART-C', qc.c4.fail);
 
@@ -2030,6 +2374,66 @@ console.log('\n== synthetic: material comparison (CAD vs Item Master) + bought-o
   check('bought-out: missing IM material flagged, no CAD data', bo1 && bo1.missingMaterial === true && bo1.cadMaterial === '', bo1);
   const bo2 = res.boughtOut.find(b => b.number === '7-999-00002');
   check('bought-out: CAD/IM mismatch flagged for purchased part', bo2 && bo2.mismatch === true && bo2.cadMaterial === 'AISI 316', bo2);
+}
+
+console.log('\n== synthetic: material comparison merges across every CAD source (not just the first with any) ==');
+{
+  // A sparse first source (Material on only one part) used to silently win
+  // over a more complete second source just by being checked first --
+  // js/revision-compare.js's cadRevisionByPn already fixed the identical bug
+  // for revisions. Same shape here: 7-100-PART-B's real CAD material only
+  // lives in the second source.
+  const imAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Material'],
+    ['7-000-MACH-01', '-', 'Machine', ''],
+    ['7-100-PART-A', '1', 'Part A', 'AISI 304'],
+    ['7-100-PART-B', '2', 'Part B', 'AISI 304'],
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => imAoa },
+  });
+  const sparseSource = {
+    kind: 'cad', source: 'flat-xlsx', hasQty: false, hasMaterial: true, fileName: 'sparse.xlsx', items: [
+      { number: '7-100-PART-A', title: 'Part A', material: 'AISI 304', isAssembly: false },
+      // no material data at all for PART-B in this source
+    ],
+  };
+  const completeSource = {
+    kind: 'cad', source: 'flat-xlsx', hasQty: false, hasMaterial: true, fileName: 'complete.xlsx', items: [
+      { number: '7-100-PART-A', title: 'Part A', material: 'AISI 304', isAssembly: false },
+      { number: '7-100-PART-B', title: 'Part B', material: 'AISI 316', isAssembly: false }, // genuine mismatch
+    ],
+  };
+  const res = materialCompare.compareMaterial([sparseSource, completeSource], im);
+  check('applicable, merging both sources', res.applicable === true);
+  check('PART-B\'s material (only in the second, more complete source) is not silently skipped',
+    res.mismatches.some(m => m.number === '7-100-PART-B' && m.cadMaterial === 'AISI 316'), res.mismatches);
+  check('cadSourceFileName lists both contributing sources', res.cadSourceFileName === 'sparse.xlsx, complete.xlsx', res.cadSourceFileName);
+
+  const resReversed = materialCompare.compareMaterial([completeSource, sparseSource], im);
+  check('order-independent: complete source first gives the same result',
+    resReversed.mismatches.some(m => m.number === '7-100-PART-B' && m.cadMaterial === 'AISI 316'), resReversed.mismatches);
+}
+
+console.log('\n== synthetic: material comparison reports "not applicable" (not silently clean) without a Row Order column ==');
+{
+  const imAoaNoPaths = [
+    ['Number', 'Title (Item,CO)', 'Material'],
+    ['7-100-PART-A', 'Part A', 'AISI 304'],
+  ];
+  const imNoPaths = itemMasterParser.parse({ SheetNames: ['Sheet'], Sheets: { Sheet: {} } }, {
+    utils: { sheet_to_json: () => imAoaNoPaths },
+  });
+  check('fixture actually has no Row Order column', imNoPaths.hasPaths === false, imNoPaths.hasPaths);
+  const cadSource = {
+    kind: 'cad', source: 'flat-xlsx', hasQty: false, hasMaterial: true, items: [
+      { number: '7-100-PART-A', title: 'Part A', material: 'AISI 316', isAssembly: false }, // would be a genuine mismatch
+    ],
+  };
+  const res = materialCompare.compareMaterial([cadSource], imNoPaths);
+  check('reports not applicable, not a false "clean" result',
+    res.applicable === false && /Row Order/.test(res.reason), res);
+  check('bought-out list is still populated even when not applicable', Array.isArray(res.boughtOut), res.boughtOut);
 }
 
 /* ---------------- real-sample baseline tests ---------------- */

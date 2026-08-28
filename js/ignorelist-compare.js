@@ -26,10 +26,13 @@
 
   // "From" text (as written in the Ignore List) -> which of compareAll()'s
   // check keys it suppresses. "cad vs item compare" is the broad, catch-all
-  // category (covers all four); "quantity mismatch" is a narrower one for a
+  // category (covers all five); "quantity mismatch" is a narrower one for a
   // part that should still be flagged if genuinely missing/reference/
   // in-Item-Master-only, but has an accepted, known quantity discrepancy
-  // that shouldn't keep getting reported; "revision" suppresses a part from
+  // that shouldn't keep getting reported — this also covers "qtyCascade"
+  // (compareAll()'s grouped root-cause finding for a whole subtree released
+  // at one uniform ratio), since a cascade root is fundamentally the same
+  // kind of finding, just pre-grouped; "revision" suppresses a part from
   // the Revision: CAD vs Item Master check (js/revision-compare.js, a
   // separate module from compareAll() but filtered the same way); "lldbo
   // candidate" suppresses a part from the LLDBO-candidate check
@@ -38,13 +41,13 @@
   // actually a long-lead part; "all" (below) is broader still — literally
   // everything the ignore list currently knows how to suppress. These are
   // independent — a part can be listed under any one or combination. Item
-  // Master QC / Material / Description checks aren't wired to the ignore
-  // list yet. Add a new category here (and to the recognized-values text in
-  // app.js's warning message) if a "From" value for one of those is needed
-  // later — "all" picks it up automatically.
+  // Master QC / Material / Description / Virtual Parts checks aren't wired
+  // to the ignore list yet. Add a new category here (and to the
+  // recognized-values text in app.js's warning message) if a "From" value
+  // for one of those is needed later — "all" picks it up automatically.
   const CATEGORIES = {
-    'cad vs item compare': ['missing', 'reference', 'qty', 'imOnly'],
-    'quantity mismatch': ['qty'],
+    'cad vs item compare': ['missing', 'reference', 'qty', 'qtyCascade', 'imOnly'],
+    'quantity mismatch': ['qty', 'qtyCascade'],
     'revision': ['revision'],
     'lldbo candidate': ['lldboCandidate'],
   };

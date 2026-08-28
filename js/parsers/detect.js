@@ -54,8 +54,36 @@
     return false;
   }
 
+  // Headers distinctive of a CAD BOM export (Inventor/Vault "Uses"
+  // structure) that itemmaster.js has no field mapping for at all — the
+  // File/Thumbnail columns link a BOM row to its CAD model, and "BOM
+  // Structure" is an Inventor-specific concept. Catches the reverse of the
+  // CAD-into-Item-Master-zone mistake `imShaped` already catches below: a
+  // small/minimal CAD export (e.g. just Item/Number/Title/QTY/File) can
+  // otherwise parse as a valid-looking Item Master outright — itemmaster.js
+  // has nothing IM-specific to reject a header shape that thin on. Unlike
+  // looksLikeItemMaster (which needs 2 hits to avoid a coincidental single-
+  // keyword collision), one hit here is already a strong signal: none of
+  // these keywords have any legitimate meaning in an ERP item record.
+  const CAD_SIGNATURE = ['bom structure', 'bomstructure', 'thumbnail', 'preview', 'file', 'file name', 'filename'];
+
+  function looksLikeCad(aoa) {
+    for (let r = 0; r < Math.min(aoa.length, 15); r++) {
+      const lower = (aoa[r] || []).map(function (c) { return cellText(c).toLowerCase(); });
+      for (const sig of CAD_SIGNATURE) if (lower.indexOf(sig) !== -1) return true;
+    }
+    return false;
+  }
+
   function parseItemMasterFromWorkbook(workbook, XLSX) {
-    return itemMasterParser.parse(workbook, XLSX);
+    const im = itemMasterParser.parse(workbook, XLSX);
+    if (im) {
+      for (const sheetName of workbook.SheetNames) {
+        const aoa = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: false, defval: null });
+        if (looksLikeCad(aoa)) { im.cadShaped = true; break; }
+      }
+    }
+    return im;
   }
 
   function parseLldboFromWorkbook(workbook, XLSX) {
@@ -101,6 +129,7 @@
     detect: {
       looksLikeItemMaster: looksLikeItemMaster,
       looksLikeLldbo: looksLikeLldbo,
+      looksLikeCad: looksLikeCad,
       parseItemMasterFromWorkbook: parseItemMasterFromWorkbook,
       parseLldboFromWorkbook: parseLldboFromWorkbook,
       parseIgnoreListFromWorkbook: parseIgnoreListFromWorkbook,

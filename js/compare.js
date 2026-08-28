@@ -122,7 +122,11 @@
         const immediate = parentOf.get(row);
         if (immediate && pathDepth(immediate) >= 1) parentRow = immediate;
         for (let anc = immediate; anc && pathDepth(anc) >= 1 && eff !== null; anc = parentOf.get(anc)) {
-          if (anc.qty !== null) eff *= anc.qty;
+          // A blank/'-' ancestor Quantity means the roll-up isn't computable,
+          // not "multiply by 1" — mirrors cadTotals()'s eff===null contract
+          // below (a null anywhere in the chain poisons every descendant's
+          // effQty, rather than silently under-multiplying).
+          eff = anc.qty === null ? null : eff * anc.qty;
         }
       }
       if (!breakdowns.has(pn)) breakdowns.set(pn, []);
@@ -134,9 +138,13 @@
         sourceRow: row.sourceRow || '',
         rowOrder: Array.isArray(row.path) ? row.path.join('.') : '',
       });
-      if (row.qty === null) { totals.set(pn, null); continue; }
+      // eff can be null from the poisoned-ancestor loop above even when this
+      // row's own qty isn't — either case means this occurrence's
+      // contribution to the rolled-up total isn't computable (mirrors
+      // cadTotals()'s identical `it.qty === null || eff === null` check).
+      if (row.qty === null || eff === null) { totals.set(pn, null); continue; }
       if (totals.get(pn) !== null || !totals.has(pn)) {
-        totals.set(pn, (totals.get(pn) || 0) + (eff === null ? row.qty : eff));
+        totals.set(pn, (totals.get(pn) || 0) + eff);
       }
     }
 
@@ -456,24 +464,27 @@
     if (!candidates.length) return { applicable: true, roots: [] };
 
     // Drop any candidate that is itself a descendant of another candidate —
-    // it is already covered by the ancestor's subtree grouping below.
-    const pathOf = function (pn) {
-      const rows = imIndex.byNumber.get(pn);
-      return rows && rows.length && Array.isArray(rows[0].path) ? rows[0].path : null;
+    // it is already covered by the ancestor's subtree grouping below. Walks
+    // the positional imIndex.parentOf chain (the same lookup
+    // buildParentIndex() built specifically to replace path-string
+    // comparison — see its own comment: real exports reuse a Row Order
+    // position for unrelated rows, empirically 40 duplicates on one
+    // 2081-row export, so comparing `path` arrays directly can attribute a
+    // candidate to the wrong ancestor).
+    const isNestedUnder = function (candidatePn, ancestorPn) {
+      const rows = imIndex.byNumber.get(candidatePn);
+      if (!rows || !rows.length) return false;
+      for (let anc = imIndex.parentOf.get(rows[0]); anc; anc = imIndex.parentOf.get(anc)) {
+        if (normNumber(anc.number) === ancestorPn) return true;
+      }
+      return false;
     };
-    const isDescendantOf = function (path, ancestorPath) {
-      if (!path || !ancestorPath || path.length <= ancestorPath.length) return false;
-      for (let i = 0; i < ancestorPath.length; i++) if (path[i] !== ancestorPath[i]) return false;
-      return true;
-    };
-    const candidatePaths = candidates.map(function (c) { return pathOf(c.parentPn); });
     const roots = [];
     for (let i = 0; i < candidates.length; i++) {
       const c = candidates[i];
-      const path = candidatePaths[i];
       let nested = false;
       for (let j = 0; j < candidates.length; j++) {
-        if (i !== j && isDescendantOf(path, candidatePaths[j])) { nested = true; break; }
+        if (i !== j && isNestedUnder(c.parentPn, candidates[j].parentPn)) { nested = true; break; }
       }
       if (nested) continue;
       const rows = imIndex.byNumber.get(c.parentPn);
@@ -651,6 +662,7 @@
     if (qtySource) {
       const ct = cadTotals(qtySource);
       qtyCascades = detectQuantityCascades(ct, imIndex);
+      qtyCascades = { applicable: qtyCascades.applicable, roots: filterIgnoredTree(qtyCascades.roots, isIgnored, 'qtyCascade', ignoredFindings) };
       qtyMismatches = [];
       for (const [pn, cadTotal] of ct.totals) {
         if (!inIM(pn)) continue; // covered by "missing"
