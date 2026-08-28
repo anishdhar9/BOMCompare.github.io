@@ -80,25 +80,35 @@
     return true;
   }
 
-  // First loaded CAD source that actually carries description text, and a
-  // lookup of its first-seen description per PN. Mirrors
-  // revision-compare.js's cadRevisionByPn.
+  // The Inventor BOM export specifically (source === 'leveled-sheet' &&
+  // hasStructure -- the same signature app.js's cadSourceLabel() already
+  // uses to identify it), and a lookup of its first-seen description per
+  // PN. This is deliberately NOT "whichever loaded CAD source has any
+  // non-empty description text": the Vault multi-level PDF has no real
+  // Description column at all -- cad-leveled.js's PDF parsing path fills
+  // `description` by echoing `title` -- so treating any non-empty text as
+  // good enough let the PDF silently win whenever it loaded before the
+  // Inventor export (both are technically "non-empty"), and "Load from
+  // folder" always loads the PDF first. Verified on a real project: PDF
+  // preferred by load order produced 498 spurious "differences" out of
+  // ~620 shared parts; requiring the Inventor export produces the correct
+  // ~24. The Inventor BOM export is the only source with genuine free-text
+  // Description data (see the "not applicable" reason below, which already
+  // documented this before this fix enforced it).
   function cadDescriptionByPn(cadSources) {
-    for (var i = 0; i < cadSources.length; i++) {
-      var src = cadSources[i];
-      var map = new Map();
-      var any = false;
-      for (var j = 0; j < src.items.length; j++) {
-        var it = src.items[j];
-        var pn = String(it.number || '').trim().toUpperCase();
-        var desc = (it.description || '').trim();
-        if (!pn || !desc) continue;
-        any = true;
-        if (!map.has(pn)) map.set(pn, desc);
-      }
-      if (any) return { source: src, byPn: map };
+    var src = (cadSources || []).find(function (s) { return s.source === 'leveled-sheet' && s.hasStructure; });
+    if (!src) return null;
+    var map = new Map();
+    var any = false;
+    for (var j = 0; j < src.items.length; j++) {
+      var it = src.items[j];
+      var pn = String(it.number || '').trim().toUpperCase();
+      var desc = (it.description || '').trim();
+      if (!pn || !desc) continue;
+      any = true;
+      if (!map.has(pn)) map.set(pn, desc);
     }
-    return null;
+    return any ? { source: src, byPn: map } : null;
   }
 
   // cadSources: the array passed to compareAll (0-2 CAD sources).

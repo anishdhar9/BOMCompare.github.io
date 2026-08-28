@@ -407,7 +407,7 @@ console.log('\n== synthetic: Description CAD vs Item Master (titledesc-compare) 
     utils: { sheet_to_json: () => imAoa },
   });
   const cadSource = {
-    kind: 'cad', source: 'leveled-sheet', hasQty: false, items: [
+    kind: 'cad', source: 'leveled-sheet', hasStructure: true, hasQty: false, items: [
       { number: '7-100-SAME', description: 'PIPE OD38.1X1.6' },
       { number: '7-100-DIFF', description: 'OD 539 X 4 THK.' },
       { number: '7-100-SPACING', description: 'TANK - 300LTRS' },
@@ -439,6 +439,33 @@ console.log('\n== synthetic: Description CAD vs Item Master (titledesc-compare) 
 
   const noCad = titleDescCompare.compareTitleDescription([{ items: [{ number: 'X', description: '' }] }], im);
   check('not applicable when no CAD source carries description text', noCad.applicable === false, noCad.reason);
+
+  // Real-data bug: the Vault PDF has no genuine Description column --
+  // cad-leveled.js's PDF path fills `description` by echoing `title` -- so
+  // every PDF item technically has "non-empty" description text. Before
+  // this fix, whichever source loaded first won (and "Load from folder"
+  // always loads the PDF before the Inventor export), so the PDF's
+  // title-echo silently overrode the real Inventor descriptions. Verified
+  // on a real project: this produced 498 spurious "differences" out of
+  // ~620 shared parts instead of the correct ~24.
+  const pdfLikeSource = {
+    kind: 'cad', source: 'pdf', hasQty: false, items: [
+      { number: '7-100-DIFF', title: 'Differs', description: 'Differs' }, // title-echoed, not a real description
+    ],
+  };
+  const pdfFirst = titleDescCompare.compareTitleDescription([pdfLikeSource, cadSource], im);
+  const invFirst = titleDescCompare.compareTitleDescription([cadSource, pdfLikeSource], im);
+  check('the Inventor BOM export (hasStructure) is used regardless of load order — PDF first',
+    pdfFirst.applicable === true && pdfFirst.mismatches.length === 1 && pdfFirst.mismatches[0].number === '7-100-DIFF' &&
+    pdfFirst.mismatches[0].cadDescription === 'OD 539 X 4 THK.', // the real Inventor text, not the PDF's title-echo
+    pdfFirst);
+  check('the Inventor BOM export (hasStructure) is used regardless of load order — Inventor first',
+    invFirst.applicable === true && invFirst.mismatches.length === 1 && invFirst.mismatches[0].number === '7-100-DIFF' &&
+    invFirst.mismatches[0].cadDescription === 'OD 539 X 4 THK.',
+    invFirst);
+  const pdfOnly = titleDescCompare.compareTitleDescription([pdfLikeSource], im);
+  check('a non-Inventor source alone (e.g. just the PDF) is not applicable, even with "non-empty" description text',
+    pdfOnly.applicable === false, pdfOnly);
 }
 
 console.log('\n== synthetic: virtual parts (no CAD file behind a subassembly) ==');
