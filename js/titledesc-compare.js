@@ -68,7 +68,16 @@
     if (!na || !nb || na === nb) return false; // exact matches are descriptionsMatch's job
     var shorter = na.length <= nb.length ? na : nb;
     var longer = na.length <= nb.length ? nb : na;
-    return longer.indexOf(shorter) === 0;
+    if (longer.indexOf(shorter) !== 0) return false;
+    // A digit immediately after the shared prefix means the "addition" is
+    // extending a number's precision (e.g. "1.6" -> "1.63"), not appending
+    // descriptive text -- that can be a genuine value change, not noise, so
+    // it must stay flagged. Verified against real data: "DIA 21.3 X1.6" is a
+    // literal prefix of "DIA 21.3 X1.63THK", and 1.6 vs 1.63 could be a real
+    // dimension difference, not a benign convention like a material suffix.
+    var nextChar = longer.charAt(shorter.length);
+    if (nextChar >= '0' && nextChar <= '9') return false;
+    return true;
   }
 
   // First loaded CAD source that actually carries description text, and a

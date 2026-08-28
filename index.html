@@ -55,6 +55,10 @@
     <section class="actions">
       <button type="button" class="btn btn-primary btn-big" id="btn-compare" disabled>Compare BOMs</button>
       <button type="button" class="btn btn-small" id="btn-clear-all">Clear files &amp; start over</button>
+      <div class="dropdown dropdown-inline" id="checks-dropdown">
+        <button type="button" class="btn btn-small" id="checks-btn">Checks to run ▾</button>
+        <div class="dropdown-menu hidden" id="checks-menu"></div>
+      </div>
     </section>
 
     <section class="dashboard hidden" id="dashboard">
@@ -168,12 +172,12 @@
 
       <div class="toolbar">
         <nav class="tabs" id="tabs">
-          <button class="tab active" data-tab="missing">Missing from Item Master <span class="count" id="count-missing"></span></button>
+          <button class="tab active" data-tab="missing" id="tab-missing">Missing from Item Master <span class="count" id="count-missing"></span></button>
           <button class="tab hidden" data-tab="ref" id="tab-ref">Reference items <span class="count" id="count-ref"></span></button>
-          <button class="tab" data-tab="qty">Quantity mismatches <span class="count" id="count-qty"></span></button>
-          <button class="tab" data-tab="cascade">Quantity cascades <span class="count" id="count-cascade"></span></button>
-          <button class="tab" data-tab="virtual">Virtual parts <span class="count" id="count-virtual"></span></button>
-          <button class="tab" data-tab="imonly">In Item Master only <span class="count" id="count-imonly"></span></button>
+          <button class="tab" data-tab="qty" id="tab-qty">Quantity mismatches <span class="count" id="count-qty"></span></button>
+          <button class="tab" data-tab="cascade" id="tab-cascade">Quantity cascades <span class="count" id="count-cascade"></span></button>
+          <button class="tab" data-tab="virtual" id="tab-virtual">Virtual parts <span class="count" id="count-virtual"></span></button>
+          <button class="tab" data-tab="imonly" id="tab-imonly">In Item Master only <span class="count" id="count-imonly"></span></button>
         </nav>
         <div class="tools">
           <input type="search" id="filter" placeholder="Filter by number, title, description…">

@@ -386,6 +386,10 @@ console.log('\n== synthetic: Description CAD vs Item Master (titledesc-compare) 
   check('already-equal strings are not "auto-matched" (that is descriptionsMatch\'s job)',
     A('Same Text', 'Same Text') === false);
   check('blank never auto-matches', A('', 'x') === false && A('x', '') === false);
+  check('a truncated number is NOT an auto-match, even though it is a literal prefix: "1.6" -> "1.63" (real data, PN22701)',
+    A('DIA 21.3 X1.6', 'DIA 21.3 X1.63THK') === false);
+  check('a non-numeric append right after the prefix boundary still auto-matches (the guard is digit-specific)',
+    A('GSF PRO 180', 'GSF PRO 180B') === true);
 
   const imAoa = [
     ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)'],

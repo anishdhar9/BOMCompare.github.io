@@ -117,6 +117,7 @@ body {
 .btn-big { font-size: 17px; padding: 12px 34px; }
 .actions { text-align: center; margin: 18px 0; }
 .actions .btn + .btn { margin-left: 10px; }
+.dropdown-inline { display: inline-block; vertical-align: top; margin-left: 10px; }
 
 /* ---- notices ---- */
 .notices .notice {

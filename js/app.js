@@ -41,6 +41,36 @@
     } catch (e) { return new Map(); }
   }
 
+  // Which of the 11 checks to run this session — a display/aggregation
+  // preference, same category as column visibility and priority tags (not
+  // reset by "Clear files & start over"). Ids and labels are the exact
+  // sheet names buildCompareWorkbook() already uses, so the selector, every
+  // section heading, and the export all agree on the same 11 names.
+  // Nothing about computation is gated by this — every check still runs;
+  // only what's aggregated into the dashboard/findings registry/panels/
+  // tabs/export is affected. See isCheckEnabled() below.
+  const CHECKS_LIST = [
+    { key: 'missing', label: 'Missing from Item Master' },
+    { key: 'reference', label: 'Reference items' },
+    { key: 'qty', label: 'Quantity mismatches' },
+    { key: 'qtyCascade', label: 'Quantity cascades' },
+    { key: 'imOnly', label: 'In Item Master only' },
+    { key: 'imQc', label: 'Item Master QC' },
+    { key: 'material', label: 'Material vs CAD' },
+    { key: 'revision', label: 'Revision vs CAD' },
+    { key: 'titleDesc', label: 'Description vs CAD' },
+    { key: 'virtual', label: 'Virtual parts' },
+    { key: 'lldbo', label: 'LLDBO check' },
+  ];
+  const CHECKS_LS_KEY = 'bomcompare.enabledChecks.v1';
+  function loadEnabledChecks() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(CHECKS_LS_KEY)) || {}; } catch (e) { /* ignore */ }
+    const prefs = {};
+    for (const c of CHECKS_LIST) prefs[c.key] = saved[c.key] !== undefined ? !!saved[c.key] : true;
+    return prefs;
+  }
+
   const state = {
     cadSources: [],     // parsed CAD results (max 2: full structure + intended BOM)
     im: null,           // parsed Item Master result (+ fileName)
@@ -65,8 +95,14 @@
     traceOpen: new Map(),    // part number -> provenance-detail toggle open?, survives re-renders
     reviewedSet: loadReviewed(), // part numbers checked off "Parts needing attention", survives reloads (localStorage)
     priorityMap: loadPriority(), // part number -> user-assigned priority ('low'|'medium'|'high'), survives reloads (localStorage)
+    enabledChecks: loadEnabledChecks(), // check key -> included in dashboard/registry/panels/tabs/export?, survives reloads (localStorage)
     attentionVisibleCount: 0,    // unreviewed, non-grouped part count — set by renderAttention(), read by the dashboard tile
   };
+
+  function saveEnabledChecks() {
+    try { localStorage.setItem(CHECKS_LS_KEY, JSON.stringify(state.enabledChecks)); } catch (e) { /* ignore */ }
+  }
+  function isCheckEnabled(key) { return state.enabledChecks[key] !== false; }
 
   function saveReviewed() {
     try { localStorage.setItem(REVIEWED_LS_KEY, JSON.stringify(Array.from(state.reviewedSet))); } catch (e) { /* ignore */ }
@@ -212,6 +248,41 @@
       label.appendChild(document.createTextNode(' ' + c.label));
       menu.appendChild(label);
     }
+  }
+
+  /* ---------------- checks to run ---------------- */
+
+  function renderChecksMenu() {
+    const menu = $('checks-menu');
+    menu.innerHTML = '';
+    for (const c of CHECKS_LIST) {
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = isCheckEnabled(c.key);
+      cb.addEventListener('change', function () {
+        state.enabledChecks[c.key] = cb.checked;
+        saveEnabledChecks();
+        rerenderChecks();
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(' ' + c.label));
+      menu.appendChild(label);
+    }
+  }
+
+  // Re-renders everything whose content depends on state.enabledChecks —
+  // called live when the "Checks to run" dropdown changes. Nothing is
+  // recomputed (every check still ran); each function below already
+  // no-ops safely when its underlying state hasn't loaded yet, same as
+  // calling them during a normal render pass.
+  function rerenderChecks() {
+    renderImQc();
+    renderMaterialPanel();
+    renderRevisionPanel();
+    renderTitleDescPanel();
+    renderLldboPanel();
+    if (state.result) renderResults(); else renderDashboard();
   }
 
   /* ---------------- upload handling ---------------- */
@@ -791,6 +862,25 @@
     return box;
   }
 
+  // A check turned off in "Checks to run" — distinct from the existing "N/A"
+  // treatment (that means the loaded files don't carry the data a check
+  // needs; this means the user chose not to run it). The section stays
+  // visible rather than disappearing, so it's easy to find and re-enable.
+  function skippedSection(title) {
+    const box = document.createElement('div');
+    box.className = 'qc-section';
+    const head = document.createElement('div');
+    head.className = 'qc-section-head';
+    head.innerHTML = '<div class="qc-section-title"></div><span class="qc-pill na">SKIPPED</span>';
+    head.querySelector('.qc-section-title').textContent = title;
+    box.appendChild(head);
+    const body = document.createElement('div');
+    body.className = 'qc-section-body open';
+    body.innerHTML = '<div class="empty-state">Turned off in "Checks to run ▾" — enable it there to see this check.</div>';
+    box.appendChild(body);
+    return box;
+  }
+
   function qcSectionFor(check, result, warnMsg) {
     const box = document.createElement('div');
     box.className = 'qc-section';
@@ -854,6 +944,12 @@
     summary.innerHTML = '';
     const sections = $('qc-sections');
     sections.innerHTML = '';
+    $('qc-callout').classList.add('hidden');
+    if (!isCheckEnabled('imQc')) {
+      sections.appendChild(skippedSection('Item Master QC'));
+      renderDashboard();
+      return;
+    }
     for (const check of QC_CHECKS) {
       const result = qc[check.key];
       const warnMsg = result.applicable && !result.fail.length ? relatedWarningFor(check) : null;
@@ -969,7 +1065,7 @@
       virtualResult: state.virtualResult,
       lldboResult: state.lldboResult,
       lldboCandidatesResult: state.lldboCandidatesResult,
-    });
+    }, isCheckEnabled);
   }
 
   function renderDashboard() {
@@ -999,20 +1095,24 @@
 
     const res = state.result;
     if (res) {
-      tiles.push({ num: res.actionableCount, label: 'Findings needing action',
-        cls: res.actionableCount ? 'red' : 'pass', onClick: function () { jumpTo('results', 'missing'); } });
-      tiles.push({ num: res.qtyMismatches === null ? '—' : res.qtyMismatches.length, label: 'Quantity mismatches',
-        cls: res.qtyMismatches === null ? 'na' : (res.qtyMismatches.length ? 'amber' : 'pass'),
-        onClick: function () { jumpTo('results', 'qty'); } });
+      if (isCheckEnabled('missing')) {
+        tiles.push({ num: res.actionableCount, label: 'Findings needing action',
+          cls: res.actionableCount ? 'red' : 'pass', onClick: function () { jumpTo('results', 'missing'); } });
+      }
+      if (isCheckEnabled('qty')) {
+        tiles.push({ num: res.qtyMismatches === null ? '—' : res.qtyMismatches.length, label: 'Quantity mismatches',
+          cls: res.qtyMismatches === null ? 'na' : (res.qtyMismatches.length ? 'amber' : 'pass'),
+          onClick: function () { jumpTo('results', 'qty'); } });
+      }
       const vres = state.virtualResult;
-      if (vres && vres.applicable) {
+      if (isCheckEnabled('virtual') && vres && vres.applicable) {
         const vn = vres.confirmed.length + vres.suspected.length;
         tiles.push({ num: vn, label: 'Virtual parts',
           sub: vn ? 'no CAD file behind them — child BOM never compared'
                   : (vres.hasThumbnailColumn ? 'none found ✓' : 'none inferred (no Thumbnail column)'),
           cls: vn ? 'red' : 'pass', onClick: function () { jumpTo('results', 'virtual'); } });
       }
-      if (res.qtyCascades.applicable) {
+      if (isCheckEnabled('qtyCascade') && res.qtyCascades.applicable) {
         tiles.push({ num: res.qtyCascades.roots.length, label: 'Quantity cascades',
           sub: res.qtyCascades.roots.length ? 'one root cause explains many mismatches — fix it first' : 'no uniform-ratio subtree found ✓',
           cls: res.qtyCascades.roots.length ? 'red' : 'pass', onClick: function () { jumpTo('results', 'cascade'); } });
@@ -1020,17 +1120,17 @@
     }
 
     const mat = state.materialResult;
-    if (mat) tiles.push({ num: mat.applicable ? mat.mismatches.length : '—', label: 'Material mismatches vs CAD',
+    if (isCheckEnabled('material') && mat) tiles.push({ num: mat.applicable ? mat.mismatches.length : '—', label: 'Material mismatches vs CAD',
       cls: mat.applicable ? (mat.mismatches.length ? 'amber' : 'pass') : 'na',
       onClick: function () { jumpTo('material-sections'); } });
 
     const rev = state.revisionResult;
-    if (rev) tiles.push({ num: rev.applicable ? rev.mismatches.length : '—', label: 'Revision mismatches vs CAD',
+    if (isCheckEnabled('revision') && rev) tiles.push({ num: rev.applicable ? rev.mismatches.length : '—', label: 'Revision mismatches vs CAD',
       cls: rev.applicable ? (rev.mismatches.length ? 'amber' : 'pass') : 'na',
       onClick: function () { jumpTo('revision-sections'); } });
 
     const qc = state.imQc;
-    if (qc) {
+    if (isCheckEnabled('imQc') && qc) {
       // The two release-blocking checks get their own tiles — a sketch part in
       // the Item Master, or a part released against a dead revision, is a
       // different class of problem from general data-quality tidiness.
@@ -1053,7 +1153,7 @@
     }
 
     const lld = state.lldboResult;
-    if (lld) {
+    if (isCheckEnabled('lldbo') && lld) {
       // Confident-tier candidates only count once cross-checked against a
       // loaded LLDBO file (cand.crossChecked is always true here, since lld
       // is only non-null once state.lldbo exists too) — the Item-Master-only
@@ -1470,6 +1570,16 @@
     if (!cand) { hideLldboResults(); return; }
     rebuildFindings(); // rows below are decorated against it
 
+    if (!isCheckEnabled('lldbo')) {
+      $('lldbo-project-warning').classList.add('hidden');
+      $('lldbo-summary').innerHTML = '';
+      const skippedSections = $('lldbo-sections');
+      skippedSections.innerHTML = '';
+      skippedSections.appendChild(skippedSection('Long-Lead Parts (LLDBO) check'));
+      renderDashboard();
+      return;
+    }
+
     const warnEl = $('lldbo-project-warning');
     if (res && res.projectKeyMismatch) {
       warnEl.textContent = '⚠ This LLDBO document is for ' + res.projectKeyMismatch.lldbo.pn +
@@ -1672,7 +1782,9 @@
     if (!res) return;
     rebuildFindings(); // rows below are decorated against it
 
-    if (res.applicable) {
+    if (!isCheckEnabled('material')) {
+      sections.appendChild(skippedSection('Material: CAD vs Item Master'));
+    } else if (res.applicable) {
       sections.appendChild(lldboSectionFor(
         'Material: CAD vs Item Master',
         'Compares CAD material (' + (res.cadSourceFileName ? '"' + res.cadSourceFileName + '"' : 'the flat Vault export') +
@@ -1776,7 +1888,9 @@
     if (!res) return;
     rebuildFindings(); // rows below are decorated against it
 
-    if (res.applicable) {
+    if (!isCheckEnabled('revision')) {
+      sections.appendChild(skippedSection('Revision: CAD vs Item Master'));
+    } else if (res.applicable) {
       sections.appendChild(revisionBoughtOutToggleEl());
       sections.appendChild(lldboSectionFor(
         'Revision: CAD vs Item Master',
@@ -1891,7 +2005,9 @@
     if (!res) return;
     rebuildFindings(); // rows below are decorated against it
 
-    if (res.applicable) {
+    if (!isCheckEnabled('titleDesc')) {
+      sections.appendChild(skippedSection('Description: CAD vs Item Master'));
+    } else if (res.applicable) {
       sections.appendChild(lldboSectionFor(
         'Description: CAD vs Item Master',
         'Compares the CAD Description (' + (res.cadSourceFileName ? '"' + res.cadSourceFileName + '"' : 'the loaded CAD source') +
@@ -1997,9 +2113,6 @@
         '“Reference items” review list (everything currently flagged BOM Reference in the model).');
     }
     for (const w of res.warnings || []) notice('info', w);
-    // reference tab visibility
-    $('tab-ref').classList.toggle('hidden', res.referenceRoots === null);
-    if (res.referenceRoots === null && state.activeTab === 'ref') switchTab('missing');
     $('results').classList.remove('hidden');
     renderResults();
     return true;
@@ -2101,6 +2214,26 @@
     $('count-virtual').textContent = virt && virt.applicable
       ? (virt.confirmed.length + virt.suspected.length) : '—';
     $('count-imonly').textContent = res.imOnlyRoots ? res.imOnlyRoots.length : res.imOnly.length;
+
+    // Tab visibility: a tab is hidden either for the existing data reasons
+    // (only "Reference items" has one today — needs both CAD sources) or
+    // because its check is off in "Checks to run ▾". Re-evaluated on every
+    // render (not just after a fresh Compare click) so toggling a check
+    // updates the tab bar live. Falls back to the first still-visible tab
+    // if the currently active one just became hidden.
+    const tabAvailable = {
+      missing: isCheckEnabled('missing'),
+      ref: isCheckEnabled('reference') && res.referenceRoots !== null,
+      qty: isCheckEnabled('qty'),
+      cascade: isCheckEnabled('qtyCascade'),
+      virtual: isCheckEnabled('virtual'),
+      imonly: isCheckEnabled('imOnly'),
+    };
+    for (const name of Object.keys(tabAvailable)) $('tab-' + name).classList.toggle('hidden', !tabAvailable[name]);
+    if (!tabAvailable[state.activeTab]) {
+      const fallback = ['missing', 'qty', 'cascade', 'virtual', 'imonly', 'ref'].find(function (n) { return tabAvailable[n]; });
+      if (fallback) switchTab(fallback);
+    }
 
     renderMissingTab();
     renderRefTab();
@@ -2863,8 +2996,13 @@
     ev.stopPropagation();
     $('columns-menu').classList.toggle('hidden');
   });
+  $('checks-btn').addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    $('checks-menu').classList.toggle('hidden');
+  });
   document.addEventListener('click', function (ev) {
     if (!ev.target.closest('#columns-dropdown')) $('columns-menu').classList.add('hidden');
+    if (!ev.target.closest('#checks-dropdown')) $('checks-menu').classList.add('hidden');
   });
 
   /* ---------------- export ---------------- */
@@ -2916,9 +3054,9 @@
       for (const c of node.children) walk(c, depth + 1, rootNumber, rootTitle);
     };
     for (const n of res.missingRoots) walk(n, 0, n.item.number, n.item.title);
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(missing), 'Missing from Item Master');
+    if (isCheckEnabled('missing')) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(missing), 'Missing from Item Master');
 
-    if (res.referenceRoots !== null) {
+    if (isCheckEnabled('reference') && res.referenceRoots !== null) {
       const ref = [['Reference component', 'Parent Number', 'Parent Title', 'In Item Master?', 'Part Number', 'Title', 'Description', 'Type', 'File', 'CAD Row #']];
       const walkRef = function (node, depth, rootNumber, rootTitle) {
         const it = node.item;
@@ -2959,7 +3097,7 @@
     } else {
       qty.push(['n/a — the CAD BOM source has no quantity column']);
     }
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qty), 'Qty mismatches');
+    if (isCheckEnabled('qty')) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qty), 'Qty mismatches');
 
     const cascades = [['Action needed', 'Cascade ratio', 'Children at ratio', 'Grouped under', 'Part Number', 'Title', 'Row #']];
     const walkCascade = function (node, depth, rootNumber) {
@@ -2978,7 +3116,7 @@
     } else {
       cascades.push(['n/a — the CAD BOM source has no quantity column']);
     }
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cascades), 'Quantity cascades');
+    if (isCheckEnabled('qtyCascade')) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cascades), 'Quantity cascades');
 
     // Grouped-under column mirrors the Missing sheet's "grouped" marker so a
     // whole subassembly absent from the CAD BOM reads as one finding.
@@ -2998,29 +3136,29 @@
       imonly.push([under ? 'grouped (parent also absent)' : 'YES', under,
         r.number, r.title, r.description, r.qty, r.rowType || '', r.sourceRow || '', r.parentNumber || '', r.parentTitle || '']);
     }
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(imonly), 'In Item Master only');
+    if (isCheckEnabled('imOnly')) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(imonly), 'In Item Master only');
 
-    if (state.imQc) {
+    if (isCheckEnabled('imQc') && state.imQc) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qcSheetRows(state.imQc)), 'Item Master QC');
     }
 
-    if (state.materialResult) {
+    if (isCheckEnabled('material') && state.materialResult) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(materialSheetRows(state.materialResult)), 'Material vs CAD');
     }
 
-    if (state.revisionResult) {
+    if (isCheckEnabled('revision') && state.revisionResult) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(revisionSheetRows(state.revisionResult)), 'Revision vs CAD');
     }
 
-    if (state.titleDescResult) {
+    if (isCheckEnabled('titleDesc') && state.titleDescResult) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(titleDescSheetRows(state.titleDescResult)), 'Description vs CAD');
     }
 
-    if (state.virtualResult) {
+    if (isCheckEnabled('virtual') && state.virtualResult) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(virtualSheetRows(state.virtualResult)), 'Virtual parts');
     }
 
-    if (state.lldboResult || state.lldboCandidatesResult) {
+    if (isCheckEnabled('lldbo') && (state.lldboResult || state.lldboCandidatesResult)) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lldboSheetRows(state.lldboResult, state.lldboCandidatesResult)), 'LLDBO check');
     }
 
@@ -3214,5 +3352,6 @@
   wireLldboZone();
   wireIgnoreListZone();
   renderColumnsMenu();
+  renderChecksMenu();
   setupFolderFeature();
 })();

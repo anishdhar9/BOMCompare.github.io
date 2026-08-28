@@ -90,8 +90,19 @@
     return Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : String(Math.round(v * 1000) / 1000);
   }
 
-  function buildRegistry(sources) {
+  // isEnabled(checkId): optional — omit to include every check (existing
+  // callers/tests are unaffected). checkId is the app's 11-way "checks to
+  // run" grouping (missing/reference/qty/qtyCascade/imOnly/imQc/material/
+  // revision/titleDesc/virtual/lldbo), a coarser namespace than the
+  // per-finding `checkKey` used elsewhere in this file (e.g. imQc's c1-c9
+  // and lldbo's lldboMissing/lldboQty/lldboCandidate all collapse to one
+  // checkId each, matching the one exported sheet each group produces).
+  // `sources.result` alone feeds FIVE checkIds (missing/reference/qty/
+  // qtyCascade/imOnly), so gating has to happen per sub-field here, not by
+  // the caller nulling out the whole `result` object.
+  function buildRegistry(sources, isEnabled) {
     sources = sources || {};
+    isEnabled = isEnabled || function () { return true; };
     const byPn = new Map();
 
     // One entry per (part, check). A part legitimately appears in several
@@ -165,9 +176,9 @@
 
     const res = sources.result;
     if (res) {
-      recordTree('missing', res.missingRoots);
-      if (res.referenceRoots) recordTree('reference', res.referenceRoots);
-      if (res.qtyCascades && res.qtyCascades.applicable && res.qtyCascades.roots.length) {
+      if (isEnabled('missing')) recordTree('missing', res.missingRoots);
+      if (isEnabled('reference') && res.referenceRoots) recordTree('reference', res.referenceRoots);
+      if (isEnabled('qtyCascade') && res.qtyCascades && res.qtyCascades.applicable && res.qtyCascades.roots.length) {
         recordTree('qtyCascade', res.qtyCascades.roots, function (node, depth) {
           if (depth !== 0) return '';
           const it = node.item;
@@ -175,25 +186,29 @@
             ' children released at ' + it.cascadeRatio + '×';
         });
       }
-      for (const m of res.qtyMismatches || []) {
-        record('qty', m.number, {
-          number: m.number, title: m.title, description: m.description,
-          detail: 'CAD ' + fmtQty(m.cadQty) + ' vs Item Master ' + fmtQty(m.imQty),
-        });
+      if (isEnabled('qty')) {
+        for (const m of res.qtyMismatches || []) {
+          record('qty', m.number, {
+            number: m.number, title: m.title, description: m.description,
+            detail: 'CAD ' + fmtQty(m.cadQty) + ' vs Item Master ' + fmtQty(m.imQty),
+          });
+        }
       }
       // Prefer the grouped tree so a whole subassembly missing from the CAD BOM
       // is one finding, not one per part; fall back to the flat list.
-      if (res.imOnlyRoots) recordTree('imOnly', res.imOnlyRoots);
-      else for (const r of res.imOnly || []) {
-        record('imOnly', r.number, {
-          number: r.number, title: r.title, description: r.description,
-          sourceRow: r.sourceRow, parentNumber: r.parentNumber, parentTitle: r.parentTitle,
-        });
+      if (isEnabled('imOnly')) {
+        if (res.imOnlyRoots) recordTree('imOnly', res.imOnlyRoots);
+        else for (const r of res.imOnly || []) {
+          record('imOnly', r.number, {
+            number: r.number, title: r.title, description: r.description,
+            sourceRow: r.sourceRow, parentNumber: r.parentNumber, parentTitle: r.parentTitle,
+          });
+        }
       }
     }
 
     const mat = sources.materialResult;
-    if (mat && mat.applicable) {
+    if (isEnabled('material') && mat && mat.applicable) {
       for (const m of mat.mismatches || []) {
         record('material', m.number, {
           number: m.number, title: m.title,
@@ -204,7 +219,7 @@
     }
 
     const td = sources.titleDescResult;
-    if (td && td.applicable) {
+    if (isEnabled('titleDesc') && td && td.applicable) {
       for (const m of td.mismatches || []) {
         record('titleDesc', m.number, {
           number: m.number, title: m.title,
@@ -217,7 +232,7 @@
     // Virtual parts own the orphaned children they explain, so each one is a
     // single finding rather than N unexplained "In Item Master only" rows.
     const virt = sources.virtualResult;
-    if (virt && virt.applicable) {
+    if (isEnabled('virtual') && virt && virt.applicable) {
       for (const v of (virt.confirmed || []).concat(virt.suspected || [])) {
         record('virtualPart', v.number, {
           number: v.number, title: v.title, description: v.description,
@@ -241,7 +256,7 @@
     }
 
     const rev = sources.revisionResult;
-    if (rev && rev.applicable) {
+    if (isEnabled('revision') && rev && rev.applicable) {
       for (const m of rev.mismatches || []) {
         record('revision', m.number, {
           number: m.number, title: m.title,
@@ -252,7 +267,7 @@
     }
 
     const qc = sources.imQc;
-    if (qc) {
+    if (isEnabled('imQc') && qc) {
       const detailFor = {
         c3: function (f) { return 'Quantity ' + f.quantity + ' vs Item Qty ' + f.itemQty; },
         c7: function (f) { return 'Revision ' + f.revision + '; also ' + f.conflictsWith; },
@@ -281,7 +296,7 @@
     }
 
     const lld = sources.lldboResult;
-    if (lld) {
+    if (isEnabled('lldbo') && lld) {
       for (const m of lld.missingFromIm || []) {
         record('lldboMissing', m.number, { number: m.number, description: m.description, sourceRow: m.sourceRow });
       }
@@ -301,7 +316,7 @@
     // (crossChecked:false) is a "these might need tracking" list, not yet a
     // confirmed gap, so it must not feed "Parts needing attention" either.
     const lldCand = sources.lldboCandidatesResult;
-    if (lldCand && lldCand.crossChecked) {
+    if (isEnabled('lldbo') && lldCand && lldCand.crossChecked) {
       for (const c of lldCand.confident || []) {
         record('lldboCandidate', c.number, {
           number: c.number, title: c.title, description: c.description,
