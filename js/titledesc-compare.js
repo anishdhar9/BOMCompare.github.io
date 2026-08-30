@@ -80,23 +80,28 @@
     return true;
   }
 
-  // The Inventor BOM export specifically (source === 'leveled-sheet' &&
-  // hasStructure -- the same signature app.js's cadSourceLabel() already
-  // uses to identify it), and a lookup of its first-seen description per
-  // PN. This is deliberately NOT "whichever loaded CAD source has any
-  // non-empty description text": the Vault multi-level PDF has no real
-  // Description column at all -- cad-leveled.js's PDF parsing path fills
-  // `description` by echoing `title` -- so treating any non-empty text as
-  // good enough let the PDF silently win whenever it loaded before the
-  // Inventor export (both are technically "non-empty"), and "Load from
-  // folder" always loads the PDF first. Verified on a real project: PDF
-  // preferred by load order produced 498 spurious "differences" out of
-  // ~620 shared parts; requiring the Inventor export produces the correct
-  // ~24. The Inventor BOM export is the only source with genuine free-text
-  // Description data (see the "not applicable" reason below, which already
-  // documented this before this fix enforced it).
+  // The Inventor BOM export specifically (source === 'leveled-sheet'), and a
+  // lookup of its first-seen description per PN. This is deliberately NOT
+  // "whichever loaded CAD source has any non-empty description text": the
+  // Vault multi-level PDF has no real Description column at all --
+  // cad-leveled.js's PDF parsing path fills `description` by echoing
+  // `title` -- so treating any non-empty text as good enough let the PDF
+  // silently win whenever it loaded before the Inventor export (both are
+  // technically "non-empty"), and "Load from folder" always loads the PDF
+  // first. Verified on a real project: PDF preferred by load order produced
+  // 498 spurious "differences" out of ~620 shared parts; requiring the
+  // Inventor export produces the correct ~24. `source === 'leveled-sheet'`
+  // alone is enough to exclude it: app.js always tags the PDF path
+  // source:'pdf' (handleCadPdf) and the flat Vault export source:'flat-xlsx'
+  // (cad-flat-xlsx.js) -- 'leveled-sheet' is only ever set for a genuine
+  // leveled Excel/CSV CAD export. An earlier version of this fix also
+  // required hasStructure (a "BOM Structure" column), reusing the same
+  // signature app.js's cadSourceLabel() uses for a cosmetic "Inventor BOM
+  // export" label -- but that column is independently optional from
+  // Description in Vault's export dialog, so it wrongly rejected a real
+  // Inventor export that had Description enabled but not BOM Structure.
   function cadDescriptionByPn(cadSources) {
-    var src = (cadSources || []).find(function (s) { return s.source === 'leveled-sheet' && s.hasStructure; });
+    var src = (cadSources || []).find(function (s) { return s.source === 'leveled-sheet'; });
     if (!src) return null;
     var map = new Map();
     var any = false;

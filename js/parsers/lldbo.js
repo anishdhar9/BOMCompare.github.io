@@ -25,9 +25,13 @@
  *             customer, documentNo, sheetName, columns, warnings }
  */
 (function (root, factory) {
-  if (typeof module !== 'undefined' && module.exports) module.exports = factory();
-  else root.BOMCompare = Object.assign(root.BOMCompare || {}, factory());
-})(typeof self !== 'undefined' ? self : this, function () {
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = factory(require('./qty-parse.js').qtyParse);
+  } else {
+    const bc = root.BOMCompare || {};
+    root.BOMCompare = Object.assign(bc, factory(bc.qtyParse));
+  }
+})(typeof self !== 'undefined' ? self : this, function (qtyParse) {
   'use strict';
 
   function cellText(v) {
@@ -35,13 +39,12 @@
     return String(v).trim();
   }
 
-  // '1 Nos.' -> 1, '3 Nos.' -> 3, 'NA' -> null, '' -> null
-  function parseQty(v) {
-    const s = cellText(v);
-    if (!s) return null;
-    const m = s.match(/-?\d+(?:\.\d+)?/);
-    return m ? parseFloat(m[0]) : null;
-  }
+  // '1 Nos.' -> 1, '3 Nos.' -> 3, '1,200 Nos.' -> 1200, 'NA' -> null, '' ->
+  // null -- shared with cad-leveled.js and itemmaster.js, see
+  // js/parsers/qty-parse.js. (Previously had no comma handling at all, so a
+  // thousands-grouped quantity like "1,200 Nos." matched only the leading
+  // "1".)
+  const parseQty = qtyParse.parseQty;
 
   function findHeader(aoa) {
     for (let r = 0; r < Math.min(aoa.length, 20); r++) {

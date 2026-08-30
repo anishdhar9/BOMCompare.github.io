@@ -483,13 +483,15 @@ Below the diff, an optional **ECR sheet** panel fills this organization's ECR (E
 Change Request) Excel template from the same two files, reverse-engineered from a real
 filled sample and its blank template:
 
-- **Item No. With Rev:** the part number fused with a zero-padded 2-digit revision suffix
-  (`7-330-20014-02` = part `7-330-20014` at revision `02`). The Item Master carries Number
-  and Revision as separate columns, so the app composes this string.
+- **Item No. With Rev:** the part number fused with its raw, unpadded revision value
+  (`7-330-20014-1` = part `7-330-20014` at revision `1`; `7-330-20008-C` for a letter
+  revision). The Item Master carries Number and Revision as separate columns, so the app
+  composes this string.
 - **A revision bump becomes a row pair**, not one changed row: the old number-with-revision
-  gets Old Qty set to its quantity and New Qty `0`, Action `Drg. Obsolete`. The new
-  number-with-revision gets Old Qty `0` and New Qty set to its quantity, Action `Drg.
-  Revised`.
+  gets Old Qty `1` and New Qty `0`, Action `Drg. Obsolete`. The new number-with-revision gets
+  Old Qty `0` and New Qty `1`, Action `Drg. Revised`. This is a binary marker, not the part's
+  real BOM quantity — confirmed against a real filled ECR, which uses this same 0/1 pair
+  regardless of how many of the part are actually used.
 - **Action is derived automatically**, matched against the template's own dropdown list:
   `Part Added`, `Part Deleted`, `Qty Changed`, `Drg. Obsolete`, `Drg. Revised`.
 - **Reason Code is left blank.** It is a 16-value business-justification list (`NEW FEATURE`,
@@ -497,8 +499,12 @@ filled sample and its blank template:
   something a two-file diff can answer.
 - A part whose only changes are Material, Title, Description, or State, with no Quantity or
   Revision change, has no matching Action code in the template, so it is not turned into an
-  ECR row. It is reported separately as "other changes needing manual review", so it is
-  never silently dropped.
+  ECR row. It is reported separately as "other changes needing manual review", so it is never
+  silently dropped. The same "other changes" list also catches a change that has no Action
+  code left to represent it because a *different* field already claimed the row — e.g. a part
+  whose Revision **and** Quantity both changed gets its revision-bump row pair (Quantity isn't
+  separately re-derivable from a 0/1 marker), so the real Quantity change is reported there
+  instead of being silently lost.
 - The header block (Project Status, Details Of Change, Engg. Comment, the document/
   department checkboxes, the 5-Why root-cause block) is left blank. These are all narrative
   or judgment fields, out of scope for an automated diff.

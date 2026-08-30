@@ -28,10 +28,17 @@
   // rather than on END_OF_LINE_NUMBER, because Check 2's whole job is to
   // catch the case where that row carries the WRONG number. It is a marker,
   // not a real part, so material checks skip it (it legitimately carries a
-  // placeholder material such as ".").
+  // placeholder material such as "."). Title/Description must EQUAL "END OF
+  // LINE" exactly (trimmed, case-insensitive) rather than merely contain it
+  // — an unanchored substring test used to both false-positive (Check 2
+  // failing a real part like "Sensor - End of Line Detector" for not
+  // carrying the sentinel number/Row Order) and false-negative (that same
+  // real part silently skipped by checks 3/5/6/7/9 as if it WERE the
+  // marker).
   function isEndOfLine(row) {
-    const t = ((row.title || '') + ' ' + (row.description || '')).toUpperCase();
-    return t.indexOf('END OF LINE') !== -1;
+    const title = String(row.title || '').trim().toUpperCase();
+    const desc = String(row.description || '').trim().toUpperCase();
+    return title === 'END OF LINE' || desc === 'END OF LINE';
   }
 
   function isRoot(row) {

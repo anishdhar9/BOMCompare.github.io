@@ -16,9 +16,13 @@
  *             items:[...], columns, headerRow, warnings }
  */
 (function (root, factory) {
-  if (typeof module !== 'undefined' && module.exports) module.exports = factory();
-  else root.BOMCompare = Object.assign(root.BOMCompare || {}, factory());
-})(typeof self !== 'undefined' ? self : this, function () {
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = factory(require('./qty-parse.js').qtyParse);
+  } else {
+    const bc = root.BOMCompare || {};
+    root.BOMCompare = Object.assign(bc, factory(bc.qtyParse));
+  }
+})(typeof self !== 'undefined' ? self : this, function (qtyParse) {
   'use strict';
 
   function cellText(v) {
@@ -26,24 +30,33 @@
     return String(v).trim();
   }
 
-  function parseQty(v) {
-    const s = cellText(v);
-    if (!s || s === '-') return null;
-    const m = s.replace(',', '.').match(/-?\d+(?:\.\d+)?/);
-    return m ? parseFloat(m[0]) : null;
-  }
+  // Locale-aware ('1,5' -> 1.5, '1.234,5' -> 1234.5, '1,200' -> 1200) --
+  // shared with itemmaster.js and lldbo.js, see js/parsers/qty-parse.js.
+  const parseQty = qtyParse.parseQty;
 
   const FIELD_KEYWORDS = {
     number: ['number', 'part number', 'part no', 'part no.', 'item number', 'document number', 'artikelnummer', 'teilenummer', 'sachnummer'],
     // 'unit qty' is deliberately NOT a qty keyword: Inventor's structured
     // export has both 'Unit QTY' (text such as 'Each') and 'QTY' (the count).
+    // The other per-unit-quantity phrasings below are the same decoy,
+    // matching itemmaster.js's quantityPerUnit list -- a per-unit column
+    // holds the quantity of one single unit of the parent (usually 1, even
+    // when the real total Quantity is 4), and must never be captured as qty.
     qty: ['qty', 'qty.', 'quantity', 'item qty', 'menge', 'anzahl', 'stück', 'stck'],
-    unit: ['unit', 'unit qty', 'bom unit', 'base unit', 'einheit'],
+    unit: [
+      'unit', 'unit qty', 'unit quantity', 'bom unit', 'base unit', 'einheit',
+      'quantity per unit', 'qty per unit', 'qty. per unit', 'quantity/unit', 'qty/unit', 'qty per parent',
+    ],
     level: ['level', 'ebene', 'stufe', 'depth'],
     pos: ['item', 'pos', 'pos.', 'position', 'row order', 'bom structure position'],
     structure: ['bom structure', 'bomstructure', 'structure'],
     title: ['title', 'name', 'bezeichnung', 'benennung'],
-    description: ['description', 'beschreibung'],
+    // 'item description' is listed explicitly (not just inferred from
+    // 'description') because a bare 'item' prefix would otherwise win it for
+    // `pos` above -- 'description' alone is not a prefix of "item
+    // description", so without this synonym the longest-prefix rule in
+    // matchField() has nothing to prefer it over 'item'.
+    description: ['description', 'beschreibung', 'item description'],
     file: ['file', 'file name', 'filename', 'dateiname', 'document'],
     material: ['material', 'werkstoff'],
     revision: ['revision', 'rev', 'rev.'],
@@ -57,16 +70,25 @@
   function matchField(headerText) {
     const h = headerText.toLowerCase().replace(/\s+/g, ' ').trim();
     if (!h) return null;
+    // 1. an exact header match wins outright.
     for (const field of Object.keys(FIELD_KEYWORDS)) {
       if (FIELD_KEYWORDS[field].indexOf(h) !== -1) return field;
     }
-    // prefix matches for compound headers like 'Title (Item,CO)' / 'Qty per'
+    // 2. otherwise, prefix match for compound headers like 'Title (Item,CO)'
+    //    or 'Qty per Unit (Each)'. When several keywords are a prefix, the
+    //    LONGEST (most specific) one wins -- so a short 'item'/'pos' can
+    //    never beat a more specific 'item description'/'qty per unit',
+    //    regardless of field/column order. Mirrors itemmaster.js's
+    //    matchField, which fixed this identical bug class first.
+    let best = null, bestLen = 0;
     for (const field of Object.keys(FIELD_KEYWORDS)) {
       for (const kw of FIELD_KEYWORDS[field]) {
-        if (kw.length >= 3 && h.indexOf(kw) === 0) return field;
+        if (kw.length >= 3 && h.indexOf(kw) === 0 && kw.length > bestLen) {
+          best = field; bestLen = kw.length;
+        }
       }
     }
-    return null;
+    return best;
   }
 
   function detectHeader(aoa) {
@@ -223,6 +245,28 @@
         hasLevels = true;
         warnings.push('Hierarchy inferred from row indentation.');
       }
+    }
+    // A blank Level/Position cell mid-file (an ordinary data gap) is carried
+    // forward from the row above rather than left null. compare.js's
+    // consumers (cadTotals, groupMissingLeveled, cadChildSets) all fall a
+    // null level back to 1 (top of tree) as a last-resort defensive default
+    // — since hasLevels=true here does not guarantee every row parsed one,
+    // that default would silently re-anchor everything after the gap to the
+    // root, corrupting grouping/roll-ups for the rest of that branch. A
+    // blank cell almost always means "same level as the row above," not
+    // "back to the top." This only fires on individual gaps in an
+    // otherwise-leveled file — the indentation fallback above already
+    // handles the separate "no level data anywhere" case.
+    if (hasLevels) {
+      let lastLevel = null, filled = 0;
+      for (const it of items) {
+        if (it.level === null) {
+          if (lastLevel !== null) { it.level = lastLevel; filled++; }
+        } else {
+          lastLevel = it.level;
+        }
+      }
+      if (filled) warnings.push(filled + ' row(s) had a blank Level/Position — assumed the same level as the row above.');
     }
     // normalize levels to start at 1
     if (hasLevels) {

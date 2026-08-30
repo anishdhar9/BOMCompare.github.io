@@ -427,6 +427,9 @@
     im.fileName = file.name;
     state.im = im;
     setImStatus(file.name, chipsFor(im), '');
+    if (im.cadShaped) {
+      notice('warn', 'The file in the Item Master box looks like it might be a CAD BOM export (it has CAD-only columns such as "File"/"Thumbnail"/"BOM Structure"). If that was a mistake, drop it on the CAD BOM box on the left instead.');
+    }
     state.imQc = BC.imQc.runChecks(im);
     renderImQc();
     runLldboCheck(); // runs even without an LLDBO file yet — shows candidate parts as a preview
@@ -1784,30 +1787,33 @@
 
     if (!isCheckEnabled('material')) {
       sections.appendChild(skippedSection('Material: CAD vs Item Master'));
-    } else if (res.applicable) {
-      sections.appendChild(lldboSectionFor(
-        'Material: CAD vs Item Master',
-        'Compares CAD material (' + (res.cadSourceFileName ? '"' + res.cadSourceFileName + '"' : 'the flat Vault export') +
-          ') against the Item Master, for manufactured (non-purchased) parts. Naming-convention differences (e.g. "1.4301" vs "AISI 304") are normalized and not flagged; a genuine grade difference (e.g. 304 vs 304L) is.',
-        MATERIAL_MISMATCH_COLS, res.mismatches,
-        '✓ CAD and Item Master materials agree for every shared manufactured part.',
-        'material'
-      ));
     } else {
-      const note = document.createElement('div');
-      note.className = 'qc-section';
-      const head = document.createElement('div');
-      head.className = 'qc-section-head';
-      head.innerHTML = '<div class="qc-section-title">Material: CAD vs Item Master</div><span class="qc-pill na">N/A</span>';
-      note.appendChild(head);
-      const body = document.createElement('div');
-      body.className = 'qc-section-body open';
-      body.innerHTML = '<div class="empty-state">' + res.reason + '</div>';
-      note.appendChild(body);
-      sections.appendChild(note);
+      if (res.applicable) {
+        sections.appendChild(lldboSectionFor(
+          'Material: CAD vs Item Master',
+          'Compares CAD material (' + (res.cadSourceFileName ? '"' + res.cadSourceFileName + '"' : 'the flat Vault export') +
+            ') against the Item Master, for manufactured (non-purchased) parts. Naming-convention differences (e.g. "1.4301" vs "AISI 304") are normalized and not flagged; a genuine grade difference (e.g. 304 vs 304L) is.',
+          MATERIAL_MISMATCH_COLS, res.mismatches,
+          '✓ CAD and Item Master materials agree for every shared manufactured part.',
+          'material'
+        ));
+      } else {
+        const note = document.createElement('div');
+        note.className = 'qc-section';
+        const head = document.createElement('div');
+        head.className = 'qc-section-head';
+        head.innerHTML = '<div class="qc-section-title">Material: CAD vs Item Master</div><span class="qc-pill na">N/A</span>';
+        note.appendChild(head);
+        const body = document.createElement('div');
+        body.className = 'qc-section-body open';
+        body.innerHTML = '<div class="empty-state">' + res.reason + '</div>';
+        note.appendChild(body);
+        sections.appendChild(note);
+      }
+      // Derives its material-mismatch highlighting from the same comparison,
+      // so it stays nested here rather than showing under a SKIPPED banner.
+      sections.appendChild(boughtOutSection(res.boughtOut));
     }
-
-    sections.appendChild(boughtOutSection(res.boughtOut));
     renderDashboard();
   }
 
@@ -2183,19 +2189,27 @@
     const cards = [
       { num: res.cadUniqueCount, lbl: 'unique parts in CAD BOM' },
       { num: res.imUniqueCount, lbl: 'unique parts in Item Master' },
-      { num: res.actionableCount, lbl: 'findings needing action', cls: res.actionableCount ? 'red' : '' },
-      { num: res.missingTotal, lbl: 'missing incl. grouped children' },
-      { num: res.qtyMismatches === null ? '—' : res.qtyMismatches.length, lbl: 'quantity mismatches', cls: res.qtyMismatches && res.qtyMismatches.length ? 'amber' : '' },
-      { num: res.imOnly.length, lbl: 'in Item Master only' },
     ];
+    if (isCheckEnabled('missing')) {
+      cards.push({ num: res.actionableCount, lbl: 'findings needing action', cls: res.actionableCount ? 'red' : '' });
+      cards.push({ num: res.missingTotal, lbl: 'missing incl. grouped children' });
+    }
+    if (isCheckEnabled('reference') && res.referenceRoots !== null) {
+      cards.push({ num: res.referenceTotal, lbl: 'reference components in CAD' });
+    }
+    if (isCheckEnabled('qty')) {
+      cards.push({ num: res.qtyMismatches === null ? '—' : res.qtyMismatches.length, lbl: 'quantity mismatches', cls: res.qtyMismatches && res.qtyMismatches.length ? 'amber' : '' });
+    }
     const rev = state.revisionResult;
-    cards.splice(5, 0, {
-      num: rev && rev.applicable ? rev.mismatches.length : '—',
-      lbl: 'revision mismatches',
-      cls: rev && rev.applicable && rev.mismatches.length ? 'amber' : '',
-    });
-    if (res.referenceRoots !== null) {
-      cards.splice(4, 0, { num: res.referenceTotal, lbl: 'reference components in CAD' });
+    if (isCheckEnabled('revision')) {
+      cards.push({
+        num: rev && rev.applicable ? rev.mismatches.length : '—',
+        lbl: 'revision mismatches',
+        cls: rev && rev.applicable && rev.mismatches.length ? 'amber' : '',
+      });
+    }
+    if (isCheckEnabled('imOnly')) {
+      cards.push({ num: res.imOnly.length, lbl: 'in Item Master only' });
     }
     for (const c of cards) {
       const el = document.createElement('div');
@@ -2233,6 +2247,10 @@
     if (!tabAvailable[state.activeTab]) {
       const fallback = ['missing', 'qty', 'cascade', 'virtual', 'imonly', 'ref'].find(function (n) { return tabAvailable[n]; });
       if (fallback) switchTab(fallback);
+      // every tab-driving check is off — nothing to switch to; hide every
+      // pane instead of leaving the last-active one's stale content showing
+      // with no tab button pointing at it.
+      else ['missing', 'ref', 'qty', 'cascade', 'virtual', 'imonly'].forEach(function (n) { $('pane-' + n).classList.add('hidden'); });
     }
 
     renderMissingTab();

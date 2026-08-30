@@ -24,9 +24,13 @@
  * Qty (or vice versa).
  */
 (function (root, factory) {
-  if (typeof module !== 'undefined' && module.exports) module.exports = factory();
-  else root.BOMCompare = Object.assign(root.BOMCompare || {}, factory());
-})(typeof self !== 'undefined' ? self : this, function () {
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = factory(require('./qty-parse.js').qtyParse);
+  } else {
+    const bc = root.BOMCompare || {};
+    root.BOMCompare = Object.assign(bc, factory(bc.qtyParse));
+  }
+})(typeof self !== 'undefined' ? self : this, function (qtyParse) {
   'use strict';
 
   function cellText(v) {
@@ -34,13 +38,9 @@
     return String(v).trim();
   }
 
-  // '4 Each' -> 4, '1,5' -> 1.5, '16' -> 16, '-' -> null
-  function parseQty(v) {
-    const s = cellText(v);
-    if (!s || s === '-') return null;
-    const m = s.replace(',', '.').match(/-?\d+(?:\.\d+)?/);
-    return m ? parseFloat(m[0]) : null;
-  }
+  // '4 Each' -> 4, '1,5' -> 1.5, '1.234,5' -> 1234.5, '16' -> 16, '-' -> null
+  // -- shared with cad-leveled.js and lldbo.js, see js/parsers/qty-parse.js.
+  const parseQty = qtyParse.parseQty;
 
   // '2.8.1' -> ['2','8','1'], '-' -> [] (the root row), '' -> null
   function parsePath(v) {
