@@ -13,7 +13,7 @@
  *   3. row indentation (leading spaces, or x-offsets supplied by pdf-extract)
  *
  * Produces: { kind:'cad', source, hasQty, hasLevels, hasMaterial, hasRevision,
- *             items:[...], columns, headerRow, warnings }
+ *             hasState, hasLinkedToItem, items:[...], columns, headerRow, warnings }
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) {
@@ -65,6 +65,19 @@
     // makes "(NULL)" the marker for a virtual component (a BOM entry with no
     // model behind it). The column is user-configurable, so it is often absent.
     thumbnail: ['thumbnail', 'preview', 'image'],
+    // The Vault "Uses" PDF and Vault's desktop-client BOM export both carry a
+    // state column describing the CAD FILE's own lifecycle (Released/Invalid/
+    // WIP/...), same concept as itemmaster.js's `stateOther` ("State
+    // (Historical)") -- never the Item's lifecycle state, which only exists
+    // in the Item Master. Deliberately excludes 'file link state' (a THIRD,
+    // distinct Vault column describing link freshness, not file state).
+    state: ['state', 'state (historical)', 'file state'],
+    // Vault's desktop-client BOM export flags rows with no matching Item
+    // (attached export files such as .stp, listed alongside the real CAD
+    // components) as 'False' here, with a blank Part Number -- those rows are
+    // already skipped by the blank-number check below regardless of this
+    // column, so it is captured for visibility/QC use, not to gate parsing.
+    linked: ['linked to item'],
   };
 
   function matchField(headerText) {
@@ -176,15 +189,25 @@
     const cNumber = col('number'), cQty = col('qty'), cLevel = col('level'),
           cPos = col('pos'), cTitle = col('title'), cDesc = col('description'),
           cFile = col('file'), cStructure = col('structure'), cMaterial = col('material'),
-          cRevision = col('revision'), cThumbnail = col('thumbnail');
+          cRevision = col('revision'), cThumbnail = col('thumbnail'), cState = col('state'),
+          cLinked = col('linked');
 
     const items = [];
     const rawIndents = [];
+    let skippedNoNumber = 0;
     for (let r = headerRow + 1; r < aoa.length; r++) {
       const row = aoa[r] || [];
       const rawNumberCell = row[cNumber];
       const number = cellText(rawNumberCell);
-      if (!number) continue;
+      if (!number) {
+        // A row with no part number but SOME other data (e.g. Vault's
+        // desktop-client export lists attached export files like .stp
+        // alongside the real CAD components, with every BOM column blank) is
+        // a deliberate omission worth surfacing -- unlike a genuinely blank
+        // separator row, which is routine spacing and not worth a warning.
+        if (row.some(function (c) { return cellText(c) !== ''; })) skippedNoNumber++;
+        continue;
+      }
       // skip repeated header rows (multi-page PDFs)
       if (matchField(number) === 'number') continue;
 
@@ -213,6 +236,10 @@
       const page = opts.pageOf && opts.pageOf[r] !== undefined && opts.pageOf[r] !== null ? opts.pageOf[r] : null;
 
       const bomStructure = cStructure >= 0 ? cellText(row[cStructure]) : '';
+      // null (not false) when the column is absent or the cell itself is
+      // blank -- "unknown" must stay distinct from a confirmed "False".
+      const linkedRaw = cLinked >= 0 ? cellText(row[cLinked]) : '';
+      const linkedToItem = linkedRaw !== '' ? /^true$/i.test(linkedRaw) : null;
       items.push({
         seq: items.length,
         number: number,
@@ -225,16 +252,26 @@
         material: cMaterial >= 0 ? cellText(row[cMaterial]) : '',
         revision: cRevision >= 0 ? cellText(row[cRevision]) : '',
         bomStructure: bomStructure,
-        isReference: /reference/i.test(bomStructure),
+        // Vault's desktop-client export has no BOM Structure column, but its
+        // "Linked to Item" carries the same meaning for a row that made it
+        // this far (a real, numbered CAD row, not one of the attachment
+        // files already skipped above): False means this part number was
+        // never actually promoted to a released Item, i.e. it is reference.
+        isReference: /reference/i.test(bomStructure) || linkedToItem === false,
         // "(NULL)" means Inventor has no CAD file behind this row; an empty
         // cell means it does. Only the explicit "(NULL)" counts, so a export
         // without the column never looks like every row is virtual.
         thumbnailMissing: cThumbnail >= 0 && /^\(NULL\)$/i.test(cellText(row[cThumbnail])),
+        state: cState >= 0 ? cellText(row[cState]) : '',
+        linkedToItem: linkedToItem,
         sourceRow: r + 1,
         page: page,
       });
     }
     if (!items.length) return null;
+    if (skippedNoNumber) {
+      warnings.push(skippedNoNumber + ' row(s) skipped — no part number (e.g. attached export files such as .stp).');
+    }
 
     // fall back to indentation-based levels when no explicit level/pos data
     let hasLevels = items.some(function (it) { return it.level !== null; });
@@ -291,6 +328,7 @@
     if (!hasLevels) warnings.push('No level/position information found — reference-assembly grouping will be inferred from the Item Master hierarchy.');
     const hasMaterial = cMaterial >= 0 && items.some(function (it) { return it.material !== ''; });
     const hasRevision = cRevision >= 0 && items.some(function (it) { return it.revision !== ''; });
+    const hasState = cState >= 0 && items.some(function (it) { return it.state !== ''; });
 
     return {
       kind: 'cad',
@@ -305,6 +343,8 @@
       // has an entirely empty Thumbnail column, and that must read as
       // "checked, none found" rather than "column missing".
       hasThumbnail: cThumbnail >= 0,
+      hasState: hasState,
+      hasLinkedToItem: cLinked >= 0,
       items: items,
       columns: cols,
       headerRow: headerRow,

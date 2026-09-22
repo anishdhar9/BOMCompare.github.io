@@ -30,7 +30,7 @@
         <div class="dz-inner">
           <div class="dz-icon">📐</div>
           <h2>CAD BOM</h2>
-          <p class="dz-hint">Vault multi-level BOM PDF, Inventor BOM export (.xlsx), or the Vault Excel paste.<br>
+          <p class="dz-hint">Vault multi-level BOM PDF, Inventor BOM export (.xlsx), the Vault Excel paste, or the Vault desktop client's BOM export (.xls).<br>
             <strong>Tip:</strong> Drop the PDF <em>and</em> the Inventor export together. This also gives you the reference-items review list and quantity checks.</p>
           <div class="dz-sources" id="cad-sources"></div>
           <p class="dz-error" id="status-error-cad"></p>
@@ -222,6 +222,7 @@
               <li><em>Vault multi-level BOM PDF</em> (the web client's “Uses” report): the full CAD structure, <strong>including reference components</strong>. Hierarchy comes from indentation. This file carries no quantities, but it does carry Revision.</li>
               <li><em>Inventor BOM export</em> (.xlsx with Item, Part Number, QTY, and BOM Structure columns, and Material and Revision when those columns were included): the intended BOM, with quantities and virtual components. Reference components are excluded from it.</li>
               <li><em>Vault Excel paste</em> (a flat file listing): the full structure, with no hierarchy or quantities. The app infers grouping from the export's depth-first order, plus the Item Master hierarchy.</li>
+              <li><em>Vault desktop client BOM export</em> (.xls, for users without access to the Vault web client): the same flat, no-hierarchy, no-quantity shape as the Vault Excel paste above, but with a header row (File Name, Revision, State (Historical), Linked to Item, Part Number, Title, Description, Material, Thumbnail) instead of fixed column offsets. Attached export files (e.g. .stp) are skipped, with a warning naming how many. A part with "Linked to Item" = False is treated as a reference component, the same as an Inventor export's "BOM Structure" = Reference. "State (Historical)" is carried through per part (e.g. "Invalid" flags a row still pointing at a superseded CAD revision) but never filters a row out.</li>
             </ul>
           </li>
           <li><strong>Missing from Item Master:</strong> part numbers found in the CAD BOM, but absent from the Item Master. This is the classic sign of a component set to <em>BOM Reference</em> in Inventor by mistake.</li>
