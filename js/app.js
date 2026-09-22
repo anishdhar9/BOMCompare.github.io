@@ -363,6 +363,7 @@
     } else {
       let srcLabel = { 'flat-xlsx': 'Vault flat export', 'pdf': 'Vault PDF (full structure)', 'leveled-sheet': 'Leveled table' }[parsed.source] || parsed.source;
       if (parsed.source === 'leveled-sheet' && parsed.hasStructure) srcLabel = 'Inventor BOM export';
+      else if (parsed.source === 'leveled-sheet' && parsed.hasLinkedToItem) srcLabel = 'Vault desktop export';
       chips.push({ text: srcLabel, kind: 'good' });
       chips.push({ text: parsed.items.length + ' components' });
       chips.push({ text: parsed.hasQty ? 'quantities ✓' : 'no quantities', kind: parsed.hasQty ? '' : 'warn' });

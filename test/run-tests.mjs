@@ -1017,6 +1017,47 @@ console.log('\n== synthetic: flat Vault Excel paste (cad-flat-xlsx.js) captures 
   check('flat-xlsx blank revision stays empty string', res.items[1].revision === '', res.items[1].revision);
 }
 
+console.log('\n== synthetic: Vault desktop-client BOM export (headered flat, no Qty/Level) captures State + Linked to Item ==');
+{
+  // Shape of the real export: File Name/Revision/State (Historical)/Linked to
+  // Item/Part Number/Title/Description/Material/Thumbnail, a depth-first
+  // listing with no Qty or Level column, attached export files (e.g. .stp)
+  // interspersed with a blank Part Number, and blank separator rows.
+  const aoa = [
+    ['File Name', 'Revision', 'State (Historical)', 'Linked to Item', 'Part Number', 'Title', 'Description', 'Material', 'Thumbnail'],
+    ['assy.iam', '0', 'Released', 'True', 'ASSY-A', 'Assy A', 'desc', '', ''],
+    ['part-b.ipt', '1', 'Released', 'True', 'PART-B', 'Part B', 'desc', 'Steel', ''],
+    ['sketch.ipt', '0', 'Released', 'False', 'PART-SKETCH', 'Sketch part', '', 'Steel', ''],
+    ['part-b.ipt_Rev_1.stp', '', '', 'False', '', '', '', '', ''], // attachment: no part number, some data
+    ['', '', '', '', '', '', '', '', ''],                          // blank separator row
+    ['part-old.ipt', '0', 'Invalid', 'True', 'PART-OLD', 'Old rev part', '', 'Steel', ''],
+  ];
+  const cad = cadLeveledParser.parse(aoa, { source: 'leveled-sheet' });
+  check('parsed', !!cad, cad);
+  check('hasState true', cad.hasState === true, cad.hasState);
+  check('hasLinkedToItem true', cad.hasLinkedToItem === true, cad.hasLinkedToItem);
+  check('hasQty false (this export carries no quantity column)', cad.hasQty === false, cad.hasQty);
+  check('hasLevels false (flat depth-first listing, no Level/Position column)', cad.hasLevels === false, cad.hasLevels);
+  check('4 real BOM rows parsed (attachment row + blank separator both excluded)', cad.items.length === 4, cad.items.length);
+  check('attachment row (no part number, but other data) is warned about, not silently dropped',
+    cad.warnings.some(w => /^1 row\(s\) skipped/.test(w)), cad.warnings);
+  check('the blank separator row does not inflate that count to 2',
+    !cad.warnings.some(w => /^2 row\(s\) skipped/.test(w)), cad.warnings);
+
+  const sketch = cad.items.find(i => i.number === 'PART-SKETCH');
+  check('Linked to Item = False captured as linkedToItem: false', sketch.linkedToItem === false, sketch);
+  check('Linked to Item = False on a real row marks it reference (never promoted to a released Item)',
+    sketch.isReference === true, sketch);
+
+  const partB = cad.items.find(i => i.number === 'PART-B');
+  check('Linked to Item = True captured as linkedToItem: true, and not reference',
+    partB.linkedToItem === true && partB.isReference === false, partB);
+
+  const old = cad.items.find(i => i.number === 'PART-OLD');
+  check('State (Historical) captured verbatim', old.state === 'Invalid', old.state);
+  check('a Released row carries its state too', partB.state === 'Released', partB.state);
+}
+
 console.log('\n== synthetic: IM quantity roll-up through ancestors ==');
 {
   const im = {
