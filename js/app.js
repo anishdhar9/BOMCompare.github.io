@@ -190,9 +190,14 @@
   }
 
   // The two roles a CAD file can play; a new upload replaces the previous
-  // file of the same role, so at most one of each is kept.
+  // file of the same role, so at most one of each is kept. The Vault PDF,
+  // the flat Vault Excel paste, and Vault's desktop-client BOM export are
+  // stand-ins for each other (same 'structure' role, whichever one a user
+  // has access to) -- never for the Inventor BOM export, which plays the
+  // separate 'bom' role. See compare.js's isCadStructureSource, the single
+  // source of truth for which is which.
   function cadRole(parsed) {
-    return parsed.source === 'leveled-sheet' ? 'bom' : 'structure';
+    return BC.isCadStructureSource(parsed) ? 'structure' : 'bom';
   }
 
   function addCadSource(parsed) {
@@ -997,6 +1002,7 @@
   function cadSourceLabel(s) {
     let lbl = { 'flat-xlsx': 'Vault flat export', 'pdf': 'Vault PDF', 'leveled-sheet': 'Leveled table' }[s.source] || s.source;
     if (s.source === 'leveled-sheet' && s.hasStructure) lbl = 'Inventor BOM export';
+    else if (s.source === 'leveled-sheet' && s.hasLinkedToItem) lbl = 'Vault desktop export';
     return lbl + (s.fileName ? ' — ' + s.fileName : '');
   }
 

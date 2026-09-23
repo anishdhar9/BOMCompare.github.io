@@ -536,16 +536,37 @@
     return atMin.length === 1 ? normNumber(atMin[0].number) : null;
   }
 
+  // A source that walks the FULL CAD "Uses" structure, references included:
+  // the Vault web client's PDF, the flat Vault Excel paste, or Vault's
+  // desktop-client BOM export (cad-leveled.js's `leveled-sheet`, but only the
+  // desktop-client variant -- marked by its distinctive "Linked to Item"
+  // column, see js/parsers/cad-leveled.js). These three are stand-ins for
+  // each other, not for the Inventor BOM export below: whichever Vault "Uses"
+  // source a user has access to (web client not everyone can reach; the
+  // desktop client is the fallback), it plays the exact same role.
+  //
+  // A bare `leveled-sheet` with neither marker (e.g. Inventor's BOM export,
+  // or a manually column-mapped file) is deliberately NOT a structure source
+  // -- see `pickRoles` below.
+  function isCadStructureSource(s) {
+    return s.source === 'pdf' || s.source === 'flat-xlsx' ||
+      (s.source === 'leveled-sheet' && s.hasLinkedToItem === true);
+  }
+
   // Pick which uploaded CAD source plays which role.
   //  - structure: the full CAD structure incl. reference components
-  //    (Vault "Uses" PDF or the flat Vault export); falls back to the first.
-  //  - bom: the intended-BOM export (leveled sheet, ideally with quantities);
-  //    only distinct from `structure` when two sources are given.
+  //    (Vault "Uses" PDF, the flat Vault export, or the Vault desktop-client
+  //    export); falls back to the first source when none of the uploaded
+  //    files carries one of those markers.
+  //  - bom: the intended-BOM export (leveled sheet, ideally with quantities,
+  //    e.g. the Inventor BOM export); only distinct from `structure` when two
+  //    sources are given, and never itself a structure-type source.
   function pickRoles(sources) {
     let structure = sources.find(function (s) { return s.source === 'pdf'; }) ||
                     sources.find(function (s) { return s.source === 'flat-xlsx'; }) ||
+                    sources.find(isCadStructureSource) ||
                     sources[0];
-    let bom = sources.find(function (s) { return s !== structure && s.source === 'leveled-sheet'; }) ||
+    let bom = sources.find(function (s) { return s !== structure && !isCadStructureSource(s); }) ||
               sources.find(function (s) { return s !== structure; }) || null;
     return { structure: structure, bom: bom };
   }
@@ -811,5 +832,6 @@
     detectQuantityCascades: detectQuantityCascades,
     filterIgnoredTree: filterIgnoredTree,
     filterIgnoredFlat: filterIgnoredFlat,
+    isCadStructureSource: isCadStructureSource,
   };
 });

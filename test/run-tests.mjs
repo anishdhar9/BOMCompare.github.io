@@ -18,7 +18,7 @@ const require = createRequire(import.meta.url);
 const rootDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 const XLSX = require(path.join(rootDir, 'vendor/xlsx.full.min.js'));
-const { compare, compareAll, countDescendants, indexItemMaster, normNumber, groupImOnly } = require(path.join(rootDir, 'js/compare.js'));
+const { compare, compareAll, countDescendants, indexItemMaster, normNumber, groupImOnly, isCadStructureSource } = require(path.join(rootDir, 'js/compare.js'));
 const { itemMasterParser } = require(path.join(rootDir, 'js/parsers/itemmaster.js'));
 const { cadFlatParser } = require(path.join(rootDir, 'js/parsers/cad-flat-xlsx.js'));
 const { cadLeveledParser } = require(path.join(rootDir, 'js/parsers/cad-leveled.js'));
@@ -1056,6 +1056,67 @@ console.log('\n== synthetic: Vault desktop-client BOM export (headered flat, no 
   const old = cad.items.find(i => i.number === 'PART-OLD');
   check('State (Historical) captured verbatim', old.state === 'Invalid', old.state);
   check('a Released row carries its state too', partB.state === 'Released', partB.state);
+}
+
+console.log('\n== synthetic: isCadStructureSource -- Vault PDF / flat paste / desktop export are all "structure", Inventor export is "bom" ==');
+{
+  check('pdf source is a structure source', isCadStructureSource({ source: 'pdf' }) === true);
+  check('flat-xlsx source is a structure source', isCadStructureSource({ source: 'flat-xlsx' }) === true);
+  check('leveled-sheet with hasLinkedToItem (Vault desktop export) is a structure source',
+    isCadStructureSource({ source: 'leveled-sheet', hasLinkedToItem: true }) === true);
+  check('leveled-sheet with hasStructure (Inventor export) is NOT a structure source -- it plays "bom"',
+    isCadStructureSource({ source: 'leveled-sheet', hasStructure: true, hasLinkedToItem: false }) === false);
+  check('a bare leveled-sheet with neither marker is NOT a structure source (default: "bom")',
+    isCadStructureSource({ source: 'leveled-sheet' }) === false);
+}
+
+console.log('\n== synthetic: Vault desktop export + Inventor BOM export together resolve roles regardless of upload order ==');
+{
+  // The Vault desktop export is a stand-in for the Vault PDF (both play
+  // "structure"), never for the Inventor export (which plays "bom") -- so
+  // pairing it with an Inventor export must behave the same as pairing the
+  // PDF with one, independent of which file was uploaded first.
+  const vaultDesktopAoa = [
+    ['File Name', 'Revision', 'State (Historical)', 'Linked to Item', 'Part Number', 'Title', 'Description', 'Material', 'Thumbnail'],
+    ['assy.iam', '0', 'Released', 'True', 'ASSY-Q', 'Assy Q', '', '', ''],
+    ['part-r.ipt', '0', 'Released', 'True', 'PART-R', 'Part R', '', 'Steel', ''],
+  ];
+  const vaultDesktop = cadLeveledParser.parse(vaultDesktopAoa, { source: 'leveled-sheet' });
+  vaultDesktop.fileName = 'vault-desktop.xls';
+  check('fixture sanity: parsed as leveled-sheet with hasLinkedToItem, no Qty', !!vaultDesktop &&
+    vaultDesktop.source === 'leveled-sheet' && vaultDesktop.hasLinkedToItem === true && vaultDesktop.hasQty === false,
+    vaultDesktop);
+
+  const inventorAoa = [
+    ['Item', 'Part Number', 'QTY', 'BOM Structure'],
+    ['1', 'ASSY-Q', '1', 'Normal'],
+    ['1.1', 'PART-R', '2', 'Normal'],
+  ];
+  const inventor = cadLeveledParser.parse(inventorAoa, { source: 'leveled-sheet' });
+  inventor.fileName = 'inventor.xlsx';
+  check('fixture sanity: parsed as leveled-sheet with hasStructure + hasQty', !!inventor &&
+    inventor.source === 'leveled-sheet' && inventor.hasStructure === true && inventor.hasQty === true, inventor);
+
+  const im = { rows: [
+    { number: 'ASSY-Q', title: '', qty: 1, path: [] },
+    { number: 'PART-R', title: '', qty: 2, path: ['1'] },
+  ] };
+
+  const forward = compareAll([vaultDesktop, inventor], im);
+  check('vault-desktop-first: structure role is the Vault desktop export',
+    forward.roles.structure.fileName === 'vault-desktop.xls', forward.roles);
+  check('vault-desktop-first: bom role is the Inventor export',
+    forward.roles.bom.fileName === 'inventor.xlsx', forward.roles);
+  check('vault-desktop-first: quantities resolved (from the Inventor export, the only source that has them)',
+    forward.hasQty === true, forward.hasQty);
+
+  const reversed = compareAll([inventor, vaultDesktop], im);
+  check('inventor-first: structure role is STILL the Vault desktop export (order-independent -- the reported bug)',
+    reversed.roles.structure.fileName === 'vault-desktop.xls', reversed.roles);
+  check('inventor-first: bom role is STILL the Inventor export',
+    reversed.roles.bom.fileName === 'inventor.xlsx', reversed.roles);
+  check('inventor-first: quantities still resolved the same way regardless of order',
+    reversed.hasQty === true, reversed.hasQty);
 }
 
 console.log('\n== synthetic: IM quantity roll-up through ancestors ==');
