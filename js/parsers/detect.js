@@ -94,6 +94,27 @@
     return ignoreListParser.parse(workbook, XLSX);
   }
 
+  // Excel's own row Group/Outline feature (Data > Group, the collapsible
+  // +/- rows and 1-2-3... buttons down the row-header margin) stores a
+  // nesting depth per physical row (sheet['!rows'][r].level, 1-7), entirely
+  // independent of any data column. A leveled export with no Level/Position
+  // column of its own (e.g. Vault's desktop-client BOM export) can still
+  // carry real hierarchy this way. SheetJS surfaces it uniformly for both
+  // .xls and .xlsx. Returns null when the sheet has no row-level metadata at
+  // all, so callers can tell "nothing to offer" from "every row is level 0".
+  function rowOutlineIndents(sheet, rowCount) {
+    const rows = sheet['!rows'];
+    if (!rows) return null;
+    const indents = [];
+    let any = false;
+    for (let r = 0; r < rowCount; r++) {
+      const lvl = rows[r] && typeof rows[r].level === 'number' ? rows[r].level : null;
+      if (lvl !== null) any = true;
+      indents.push(lvl);
+    }
+    return any ? indents : null;
+  }
+
   // Try the flat Vault paste first, then a leveled table. Returns:
   //   { ok: result } | { needsMapping: {analysis, aoa, sheetName} } | null
   function parseCadFromWorkbook(workbook, XLSX) {
@@ -101,9 +122,14 @@
     if (flat) return { ok: flat };
 
     for (const sheetName of workbook.SheetNames) {
-      const aoa = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: false, defval: null });
+      const sheet = workbook.Sheets[sheetName];
+      const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: null });
       if (looksLikeLldbo(aoa)) continue; // "PART NO"/"Qty." would otherwise false-match the CAD keyword table
-      const leveled = cadLeveledParser.parse(aoa, { source: 'leveled-sheet' });
+      const leveled = cadLeveledParser.parse(aoa, {
+        source: 'leveled-sheet',
+        indents: rowOutlineIndents(sheet, aoa.length),
+        indentSource: "the file's row grouping (Excel's Data > Group outline levels), not a Level column",
+      });
       if (leveled) {
         if (looksLikeItemMaster(aoa)) leveled.imShaped = true; // app suggests swapping zones
         return { ok: leveled };

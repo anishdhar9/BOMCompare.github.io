@@ -1119,6 +1119,45 @@ console.log('\n== synthetic: Vault desktop export + Inventor BOM export together
     reversed.hasQty === true, reversed.hasQty);
 }
 
+console.log("\n== synthetic: detect.js reads Excel's own row Group/Outline levels when no Level column exists ==");
+{
+  // Vault's desktop-client BOM export (and any other leveled export with no
+  // Level/Position column) can still carry real hierarchy via Excel's native
+  // Data > Group row outline feature (sheet['!rows'][r].level, 1-7) -- a
+  // human collapsing/expanding the tree in Excel, not a data column. This
+  // must survive the real SheetJS round-trip (aoa_to_sheet + '!rows'), not
+  // just a hand-built aoa, since detect.js reads it straight off the sheet
+  // object rather than off the array-of-arrays cad-leveled.js otherwise sees.
+  const aoa = [
+    ['File Name', 'Revision', 'State (Historical)', 'Linked to Item', 'Part Number', 'Title', 'Description', 'Material', 'Thumbnail'],
+    ['assy-top.iam', '0', 'Released', 'True', 'ASSY-TOP', 'Top assy', '', '', ''],
+    ['assy-sub.iam', '0', 'Released', 'True', 'ASSY-SUB', 'Sub assy', '', '', ''],
+    ['part-leaf.ipt', '0', 'Released', 'True', 'PART-LEAF', 'Leaf part', '', 'Steel', ''],
+    ['part-top2.ipt', '0', 'Released', 'True', 'PART-TOP2', 'Second top-level part', '', 'Steel', ''],
+  ];
+  const sheet = XLSX.utils.aoa_to_sheet(aoa);
+  // Row 0 = header (no group), row 1 = ASSY-TOP (top level, no group either --
+  // matches the real export, where the root machine row is also ungrouped),
+  // row 2 = ASSY-SUB (level 1, child of ASSY-TOP), row 3 = PART-LEAF (level 2,
+  // child of ASSY-SUB), row 4 = PART-TOP2 (no group -- back to top level).
+  sheet['!rows'] = [null, null, { level: 1 }, { level: 2 }, null];
+  const wb = { SheetNames: ['Sheet1'], Sheets: { Sheet1: sheet } };
+
+  const res = detect.parseCadFromWorkbook(wb, XLSX);
+  check('parsed', !!(res && res.ok), res);
+  const cad = res.ok;
+  check('hasLevels true (read from row grouping, no Level column present)', cad.hasLevels === true, cad.hasLevels);
+  check('warning names the real source, not the generic "inferred from row indentation" wording',
+    cad.warnings.some(w => /row grouping/.test(w) && !/inferred/.test(w)), cad.warnings);
+
+  const byNum = Object.fromEntries(cad.items.map(it => [it.number, it.level]));
+  check('ASSY-TOP at level 1 (ungrouped root)', byNum['ASSY-TOP'] === 1, byNum);
+  check('ASSY-SUB at level 2 (one group level in)', byNum['ASSY-SUB'] === 2, byNum);
+  check('PART-LEAF at level 3 (two group levels in)', byNum['PART-LEAF'] === 3, byNum);
+  check('PART-TOP2 back at level 1 (ungrouped again, not stuck at the previous depth)',
+    byNum['PART-TOP2'] === 1, byNum);
+}
+
 console.log('\n== synthetic: IM quantity roll-up through ancestors ==');
 {
   const im = {

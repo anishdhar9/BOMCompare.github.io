@@ -165,7 +165,13 @@
    * @param aoa      array-of-arrays including the header row
    * @param opts     { mapping?: {number,qty,level,pos,title,description,file},
    *                   headerRow?: number,
-   *                   indents?: (number|null)[] aligned to aoa rows (from pdf-extract),
+   *                   indents?: (number|null)[] aligned to aoa rows (from
+   *                     pdf-extract's x-offsets, or detect.js reading Excel's
+   *                     own row Group/Outline levels -- see indentSource),
+   *                   indentSource?: string, human-readable name of where
+   *                     `indents` came from, used only in the warning text
+   *                     when no explicit Level/Position column exists (falls
+   *                     back to a generic "row indentation" wording),
    *                   source?: string }
    */
   function parse(aoa, opts) {
@@ -280,7 +286,9 @@
       if (lv) {
         items.forEach(function (it, i) { it.level = lv[i]; });
         hasLevels = true;
-        warnings.push('Hierarchy inferred from row indentation.');
+        warnings.push(opts.indentSource
+          ? 'Hierarchy read from ' + opts.indentSource + '.'
+          : 'Hierarchy inferred from row indentation.');
       }
     }
     // A blank Level/Position cell mid-file (an ordinary data gap) is carried
