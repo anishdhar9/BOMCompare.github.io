@@ -55,7 +55,14 @@ these browsers, and a note explains why. The manual dropzones are the fallback, 
 work in every browser.
 
 **Best results:** drop two CAD files together, the Vault multi-level BOM **PDF** and the
-Inventor BOM **export (.xlsx)**. These two files add different data:
+Inventor BOM **export (.xlsx)**. If the Vault web client isn't available to you, Vault's
+**desktop client BOM export** (`.xls`) is a stand-in for the PDF — both walk the same full
+CAD structure, so either one pairs with the Inventor export the same way. They are not
+interchangeable with the Inventor export itself: the app always pairs "whichever Vault
+structure source you have" against "the Inventor export," never Vault-source against
+Vault-source. Uploading a second file of the *same* role (for example, dropping the PDF
+after the desktop export is already loaded) replaces the first, it does not add a third
+source. These two files add different data:
 
 | | Vault "Uses" PDF | Inventor BOM export |
 |---|---|---|
