@@ -90,7 +90,7 @@ When the Inventor export includes a Material column, the app also runs the
 | **Inventor BOM export** (.xlsx: Item / Part Number / QTY / BOM Structure) | exact (dotted Item) | yes | excluded |
 | Any leveled Excel or CSV file (Level or dotted Item column, plus Number) | exact | if a Qty column exists | depends on the source |
 | Flat Vault **Excel** paste (no header row, depth-first list) | inferred | no | included |
-| Vault **desktop client** BOM export (.xls, headered: File Name / Revision / State (Historical) / Linked to Item / Part Number / Title / Description / Material / Thumbnail) | inferred | no | included (from `Linked to Item = False`) |
+| Vault **desktop client** BOM export (.xls, headered: File Name / Revision / State (Historical) / Linked to Item / Part Number / Title / Description / Material / Thumbnail) | exact, if the file has Excel row grouping — else none | no | included (from `Linked to Item = False`) |
 
 Vault lets users choose which columns to show in an export. Because of this, the app finds
 columns by header name and content, not by position. If detection fails, the app shows a
@@ -104,14 +104,22 @@ wrapped lines (part numbers split like `7-320-` and `20066`). It skips `Attachme
 scanned, image-only PDF files.
 
 Users without access to the Vault web client can instead export the BOM from Vault's
-desktop client, which has the same depth-first, no-hierarchy, no-quantity shape as the flat
-Vault Excel paste above, but with a header row instead of fixed column offsets. Attached
-export files (`.stp`, etc.) are listed with a blank Part Number and are skipped, with a
-warning naming how many rows were skipped. A part number with `Linked to Item = False`
-(never promoted to a released Item) is treated as a reference component, the same as an
-Inventor export's `BOM Structure = Reference` row. A `State (Historical)` column, when
-present, is carried through per part (for example `Invalid`, flagging a row still pointing
-at a superseded CAD revision) but is not filtered out or used to reject rows.
+desktop client, which has the same depth-first, no-quantity shape as the flat Vault Excel
+paste above, but with a header row instead of fixed column offsets, and no Level or
+Position column of its own. Attached export files (`.stp`, etc.) are listed with a blank
+Part Number and are skipped, with a warning naming how many rows were skipped. A part
+number with `Linked to Item = False` (never promoted to a released Item) is treated as a
+reference component, the same as an Inventor export's `BOM Structure = Reference` row. A
+`State (Historical)` column, when present, is carried through per part (for example
+`Invalid`, flagging a row still pointing at a superseded CAD revision) but is not filtered
+out or used to reject rows.
+
+This export can still carry exact hierarchy, though, if it has Excel's own row
+**Group/Outline** applied (`Data > Group`, the collapsible `+`/`-` rows and the `1 2 3 …`
+buttons down the row-header margin in Excel) — common when someone expands/collapses the
+BOM tree in Excel before saving. The app reads that per-row outline depth straight from the
+file (`.xls` and `.xlsx` both), the same way it reads x-offsets from the PDF, and only
+falls back to "no hierarchy" when the file carries no outline levels at all.
 
 ### Item Master BOM (right box)
 
