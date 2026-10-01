@@ -38,8 +38,10 @@ security reasons. The closest match is the **File System Access API**.
 Click **📁 Load from folder**. Select the PNxxxx project folder one time, in the native OS
 picker. The app then does the rest automatically:
 
-- It finds the CAD BOM (`Autodesk Vault- <assembly>.pdf`, or Vault's default name
-  `Autodesk_Vault__<assembly>.iam.pdf`), the Item Master (`EBOM_<assembly>.xlsx`), the
+- It finds the CAD BOM — preferring Vault's desktop-client export (`VAULT_BOM_<assembly>.xls`)
+  when present, since PDF text extraction has proven the less reliable of the two; otherwise
+  the PDF (`Autodesk Vault- <assembly>.pdf`, or Vault's default name
+  `Autodesk_Vault__<assembly>.iam.pdf`) — the Item Master (`EBOM_<assembly>.xlsx`), the
   Inventor BOM export (`INVENTOR_BOM_<assembly>.xlsx`, an optional second CAD source), and
   the long-lead parts list, if present (`PNxxxx_LLDBO.xlsx`).
 - It loads every file it finds, runs the comparisons, and writes

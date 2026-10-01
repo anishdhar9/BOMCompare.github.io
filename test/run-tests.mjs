@@ -2216,6 +2216,10 @@ console.log('\n== synthetic: folder auto-load file classification ==');
     ['Inventor BOM - 726020768.xls', 'inventor-bom'],              // case-insensitive, spacing variant
     ['inventor-bom-726020768.xlsx', 'inventor-bom'],
     ['INVENTOR_BOM_726020768.docx', null],                         // right prefix, wrong extension
+    ['VAULT_BOM_7-230-20526.xls', 'vault-bom'],                    // real sample naming
+    ['Vault BOM - 723020509.xlsx', 'vault-bom'],                   // case-insensitive, spacing variant
+    ['vault-bom-723020509.xls', 'vault-bom'],
+    ['VAULT_BOM_7-230-20526.docx', null],                          // right prefix, wrong extension
   ];
   for (const [name, expected] of cases) {
     check('classifyFolderFile(' + JSON.stringify(name) + ') = ' + expected,
@@ -2234,6 +2238,7 @@ console.log('\n== synthetic: folder auto-load file classification ==');
   }
   const mockEntries = [
     { kind: 'file', name: 'Autodesk Vault- 723020509.pdf', getFile: async () => ({ name: 'Autodesk Vault- 723020509.pdf' }) },
+    { kind: 'file', name: 'VAULT_BOM_723020509.xls', getFile: async () => ({ name: 'VAULT_BOM_723020509.xls' }) },
     { kind: 'file', name: 'EBOM_723020509.xlsx', getFile: async () => ({ name: 'EBOM_723020509.xlsx' }) },
     { kind: 'file', name: 'INVENTOR_BOM_723020509.xlsx', getFile: async () => ({ name: 'INVENTOR_BOM_723020509.xlsx' }) },
     { kind: 'file', name: 'notes.txt', getFile: async () => ({ name: 'notes.txt' }) },
@@ -2241,9 +2246,12 @@ console.log('\n== synthetic: folder auto-load file classification ==');
   ];
   const found = await folder.scanFolder(mockDir(mockEntries));
   check('scanFolder finds exactly 1 cad-pdf', found['cad-pdf'].length === 1 && found['cad-pdf'][0].name === 'Autodesk Vault- 723020509.pdf', found['cad-pdf']);
+  check('scanFolder finds exactly 1 vault-bom, distinct from cad-pdf',
+    found['vault-bom'].length === 1 && found['vault-bom'][0].name === 'VAULT_BOM_723020509.xls', found['vault-bom']);
   check('scanFolder finds exactly 1 item-master', found['item-master'].length === 1 && found['item-master'][0].name === 'EBOM_723020509.xlsx', found['item-master']);
   check('scanFolder finds exactly 1 inventor-bom', found['inventor-bom'].length === 1 && found['inventor-bom'][0].name === 'INVENTOR_BOM_723020509.xlsx', found['inventor-bom']);
-  check('scanFolder ignores directories and unmatched files', found['cad-pdf'].length + found['item-master'].length + found['inventor-bom'].length === 3);
+  check('scanFolder ignores directories and unmatched files',
+    found['cad-pdf'].length + found['vault-bom'].length + found['item-master'].length + found['inventor-bom'].length === 4);
 
   // ambiguous folder (two EBOM files) -> both bucketed, caller decides what to do
   const ambiguousEntries = mockEntries.concat([

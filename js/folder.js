@@ -15,6 +15,14 @@
  * Expected folder contents (this organization's convention):
  *   "Autodesk Vault- <assembly>.pdf"  (or Vault's own default naming,
  *      "Autodesk_Vault__<assembly>.iam.pdf")     -> CAD BOM (Vault PDF)
+ *   "VAULT_BOM_<assembly>.xls"                    -> CAD BOM (Vault desktop-client export) —
+ *                                                     same 'structure' role as the PDF above
+ *                                                     (see compare.js's isCadStructureSource),
+ *                                                     and preferred over it when both are
+ *                                                     present: PDF text extraction is the less
+ *                                                     reliable of the two, so app.js skips it
+ *                                                     entirely rather than load it only to
+ *                                                     have this file immediately replace it
  *   "EBOM_<assembly>.xlsx"                        -> Item Master BOM
  *   "INVENTOR_BOM_<assembly>.xlsx"                -> Inventor BOM export (optional second
  *                                                     CAD source — carries quantities and,
@@ -36,6 +44,10 @@
     if (/^PN\d+_LLDBO/i.test(name) && /\.xlsx?$/i.test(name)) return 'lldbo'; // checked before item-master: distinct prefix, no overlap risk
     if (/^ignorelist/i.test(name) && /\.xlsx?$/i.test(name)) return 'ignore-list';
     if (/autodesk[ _-]*vault/i.test(name) && /\.pdf$/i.test(name)) return 'cad-pdf';
+    // Checked before "autodesk[ _-]*vault" has any chance to matter: distinct
+    // "vault[ _-]*bom" prefix and a spreadsheet extension, so it can never
+    // collide with the PDF naming above (different prefix AND extension).
+    if (/^vault[ _-]*bom/i.test(name) && /\.xlsx?$/i.test(name)) return 'vault-bom';
     if (/^inventor[ _-]*bom/i.test(name) && /\.xlsx?$/i.test(name)) return 'inventor-bom';
     if (/^ebom/i.test(name) && /\.xlsx?$/i.test(name)) return 'item-master';
     return null;
@@ -47,7 +59,7 @@
   // classifyFolderFile. Kept separate from any DOM/picker call so it's
   // testable with a plain mock, no browser needed.
   async function scanFolder(directoryHandle) {
-    const found = { 'cad-pdf': [], 'item-master': [], 'lldbo': [], 'inventor-bom': [], 'ignore-list': [] };
+    const found = { 'cad-pdf': [], 'vault-bom': [], 'item-master': [], 'lldbo': [], 'inventor-bom': [], 'ignore-list': [] };
     for await (const entry of directoryHandle.values()) {
       if (entry.kind !== 'file') continue;
       const kind = classifyFolderFile(entry.name);
