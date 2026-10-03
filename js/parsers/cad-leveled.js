@@ -13,7 +13,8 @@
  *   3. row indentation (leading spaces, or x-offsets supplied by pdf-extract)
  *
  * Produces: { kind:'cad', source, hasQty, hasLevels, hasMaterial, hasRevision,
- *             hasState, hasLinkedToItem, items:[...], columns, headerRow, warnings }
+ *             hasState, hasLinkedToItem, hasVaultSource, hasReplacedBy,
+ *             items:[...], columns, headerRow, warnings }
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) {
@@ -78,6 +79,14 @@
     // already skipped by the blank-number check below regardless of this
     // column, so it is captured for visibility/QC use, not to gate parsing.
     linked: ['linked to item'],
+    // Make/Buy-style sourcing and supersession -- see itemmaster.js and
+    // imqc.js's Check 10, which validates these on the Item Master side.
+    // Captured here too (Vault's columns are user-configurable per export,
+    // CAD-shaped or not) for visibility, but nothing currently validates
+    // them on a CAD source -- there is no CAD-side QC panel yet.
+    source: ['source'],
+    sourceOther: ['source item'], // see itemmaster.js's identical guard
+    replacedBy: ['replaced by', 'replacedby'],
   };
 
   function matchField(headerText) {
@@ -196,7 +205,7 @@
           cPos = col('pos'), cTitle = col('title'), cDesc = col('description'),
           cFile = col('file'), cStructure = col('structure'), cMaterial = col('material'),
           cRevision = col('revision'), cThumbnail = col('thumbnail'), cState = col('state'),
-          cLinked = col('linked');
+          cLinked = col('linked'), cSource = col('source'), cReplacedBy = col('replacedBy');
 
     const items = [];
     const rawIndents = [];
@@ -270,6 +279,12 @@
         thumbnailMissing: cThumbnail >= 0 && /^\(NULL\)$/i.test(cellText(row[cThumbnail])),
         state: cState >= 0 ? cellText(row[cState]) : '',
         linkedToItem: linkedToItem,
+        // Named `vaultSource`, not `source` -- this parser's own `source`
+        // (see the returned object below) already means the file FORMAT
+        // ('pdf'/'flat-xlsx'/'leveled-sheet'), a different thing entirely
+        // from Vault's Make/Buy-style item property.
+        vaultSource: cSource >= 0 ? cellText(row[cSource]) : '',
+        replacedBy: cReplacedBy >= 0 ? cellText(row[cReplacedBy]) : '',
         sourceRow: r + 1,
         page: page,
       });
@@ -337,6 +352,8 @@
     const hasMaterial = cMaterial >= 0 && items.some(function (it) { return it.material !== ''; });
     const hasRevision = cRevision >= 0 && items.some(function (it) { return it.revision !== ''; });
     const hasState = cState >= 0 && items.some(function (it) { return it.state !== ''; });
+    const hasVaultSource = cSource >= 0 && items.some(function (it) { return it.vaultSource !== ''; });
+    const hasReplacedBy = cReplacedBy >= 0 && items.some(function (it) { return it.replacedBy !== ''; });
 
     return {
       kind: 'cad',
@@ -346,6 +363,8 @@
       hasStructure: cStructure >= 0,
       hasMaterial: hasMaterial,
       hasRevision: hasRevision,
+      hasVaultSource: hasVaultSource,
+      hasReplacedBy: hasReplacedBy,
       // Header presence alone, unlike hasMaterial/hasRevision which also
       // require a non-empty value: a clean export with no virtual components
       // has an entirely empty Thumbnail column, and that must read as

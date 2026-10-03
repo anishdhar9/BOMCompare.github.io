@@ -73,6 +73,7 @@
     { key: 'material', severity: 60, label: 'Material mismatch vs CAD', section: 'material-sections' },
     { key: 'titleDesc', severity: 55, label: 'Description mismatch vs CAD', section: 'titledesc-sections' },
     { key: 'imOnly', severity: 50, label: 'In Item Master only', section: 'results', tab: 'imonly' },
+    { key: 'c10', severity: 46, label: 'Source / Replaced By not blank', section: 'im-qc' },
     { key: 'c3', severity: 45, label: 'Quantity vs Item Qty', section: 'im-qc' },
     { key: 'c7', severity: 44, label: 'Revision inconsistent across positions', section: 'im-qc' },
     { key: 'c6', severity: 43, label: 'Material missing', section: 'im-qc' },
@@ -277,8 +278,9 @@
         c2: function (f) { return f.issue || ''; },
         c8: function (f) { return 'Found at ' + (f.trail || 'top level') + (f.state ? ' — state ' + f.state : ''); },
         c9: function (f) { return 'State "' + f.state + '" — ' + f.severity; },
+        c10: function (f) { return f.issue || ''; },
       };
-      for (const key of ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9']) {
+      for (const key of ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9', 'c10']) {
         const r = qc[key];
         if (!r || !r.applicable) continue;
         for (const f of r.fail || []) {

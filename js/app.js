@@ -795,6 +795,10 @@
       desc: 'A released BOM should contain Certified items only. Obsolete, Invalid and Phased Out are errors — the part was released against a dead revision. "New" is shown as a warning, not a failure.',
       cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
         [['title', 'Title'], ['state', 'State'], ['severity', 'Severity']]) },
+    { key: 'c10', title: 'Source / Replaced By',
+      desc: 'Source and Replaced By should be blank on every row — this site does not track Make/Buy sourcing or supersession on its own parts. "1-" and "2-" numbered parts are excluded (procured from other locations that do use these fields).',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
+        [['title', 'Title'], ['source', 'Source'], ['replacedBy', 'Replaced By'], ['issue', 'Issue']]) },
   ];
 
   function hideImQc() {

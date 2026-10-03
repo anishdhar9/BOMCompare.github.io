@@ -10,7 +10,7 @@
  * (Entity Icon) isn't present in a given export, rather than flagging every
  * row as failing.
  *
- * Produces: { c1, c2, c3, c4, c5, c6, c7, c8, c9 }, each either
+ * Produces: { c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 }, each either
  *   { applicable: true, fail: [...] }  or
  *   { applicable: false, reason: string }
  * c9 additionally carries { errorCount, warnCount } so the UI can show amber
@@ -439,6 +439,41 @@
     return { applicable: true, fail: fail, errorCount: errorCount, warnCount: warnCount };
   }
 
+  // Check 10: Source / Replaced By should be blank on every row. Both are
+  // Make/Buy-sourcing and supersession properties this site does not track
+  // for its own parts -- except "1-" and "2-" numbered parts specifically
+  // (a narrower exception than isOwnPart's general "not 7-" exclusion: a
+  // "3-" or "5-" part is still flagged here even though those prefixes are
+  // likewise not controlled at this site, since only 1-/2- parts are known
+  // to legitimately carry this data). Applicable once the export carries
+  // either column; flags whichever of the two is actually populated.
+  var SOURCE_EXEMPT_RE = /^[12]-/;
+
+  function checkSourceReplacedBy(im, pathIndex) {
+    if (!im.hasSource && !im.hasReplacedBy) {
+      return { applicable: false, reason: 'No "Source" or "Replaced By" column found in this export.' };
+    }
+    var fail = [];
+    for (var i = 0; i < im.rows.length; i++) {
+      var row = im.rows[i];
+      if (isEndOfLine(row)) continue; // ERP completeness marker, not a part
+      if (SOURCE_EXEMPT_RE.test(String(row.number || '').trim())) continue; // 1-/2- parts: expected to carry this
+      var issues = [];
+      if (im.hasSource && !blank(row.source)) issues.push('Source "' + row.source + '"');
+      if (im.hasReplacedBy && !blank(row.replacedBy)) issues.push('Replaced By "' + row.replacedBy + '"');
+      if (!issues.length) continue;
+      fail.push(withLocation({
+        number: row.number,
+        rowOrder: rowOrderText(row) || '-',
+        title: row.title || '',
+        source: row.source || '(blank)',
+        replacedBy: row.replacedBy || '(blank)',
+        issue: issues.join('; ') + ' not blank',
+      }, pathIndex, row));
+    }
+    return { applicable: true, fail: fail };
+  }
+
   function runChecks(im) {
     var pathIndex = buildPathIndex(im.rows);
     return {
@@ -451,6 +486,7 @@
       c7: checkRevisionConsistency(im, pathIndex),
       c8: checkSketchParts(im, pathIndex),
       c9: checkItemState(im, pathIndex),
+      c10: checkSourceReplacedBy(im, pathIndex),
       total: im.rows.length,
     };
   }
@@ -463,6 +499,7 @@
       PURCHASED_PART_RE: PURCHASED_PART_RE,
       MANUFACTURED_PART_RE: MANUFACTURED_PART_RE,
       SKETCH_PART_RE: SKETCH_PART_RE,
+      SOURCE_EXEMPT_RE: SOURCE_EXEMPT_RE,
       isOwnPart: isOwnPart,
       isEndOfLine: isEndOfLine,
       buildAssemblySet: buildAssemblySet,
