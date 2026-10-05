@@ -1058,6 +1058,34 @@ console.log('\n== synthetic: Vault desktop-client BOM export (headered flat, no 
   check('a Released row carries its state too', partB.state === 'Released', partB.state);
 }
 
+console.log('\n== synthetic: leveled CAD parsing captures Source / Replaced By when present (no CAD QC check yet, capture only) ==');
+{
+  const aoa = [
+    ['Number', 'Title', 'Source', 'Replaced by'],
+    ['PART-A', 'desc', 'Buy', ''],
+    ['PART-B', 'desc', '', '7-100-0099'],
+    ['PART-C', 'desc', '', ''],
+  ];
+  const cad = cadLeveledParser.parse(aoa, { source: 'leveled-sheet' });
+  check('hasVaultSource / hasReplacedBy true', cad.hasVaultSource === true && cad.hasReplacedBy === true, cad);
+  // named vaultSource, not source -- this module's own `source` field means
+  // the file FORMAT ('leveled-sheet' etc.), a different thing entirely.
+  check('vaultSource captured under vaultSource, not source (which stays the format tag)',
+    cad.items[0].vaultSource === 'Buy' && cad.source === 'leveled-sheet', cad.items[0]);
+  check('replacedBy captured per item', cad.items[1].replacedBy === '7-100-0099', cad.items[1]);
+  check('blank cells stay empty string, not null', cad.items[2].vaultSource === '' && cad.items[2].replacedBy === '', cad.items[2]);
+
+  const noCols = cadLeveledParser.parse([['Number', 'Title'], ['PART-A', 'desc']], { source: 'leveled-sheet' });
+  check('hasVaultSource / hasReplacedBy false when neither column exists',
+    noCols.hasVaultSource === false && noCols.hasReplacedBy === false, noCols);
+
+  // "Source Item" is a different, real Vault column and must never be
+  // mistaken for "Source" -- same guard as itemmaster.js.
+  const sourceItemCad = cadLeveledParser.parse(
+    [['Number', 'Title', 'Source Item'], ['PART-A', 'desc', 'SOME-OTHER-ITEM']], { source: 'leveled-sheet' });
+  check('"Source Item" is not captured as "Source"', sourceItemCad.hasVaultSource === false, sourceItemCad);
+}
+
 console.log('\n== synthetic: isCadStructureSource -- Vault PDF / flat paste / desktop export are all "structure", Inventor export is "bom" ==');
 {
   check('pdf source is a structure source', isCadStructureSource({ source: 'pdf' }) === true);
@@ -2044,6 +2072,54 @@ console.log('\n== synthetic: sketch parts in Item Master (c8) + item state (c9) 
     reg.byPn.get('PART-NEW').primary.key === 'c9warn', reg.byPn.get('PART-NEW').primary);
 }
 
+console.log('\n== synthetic: Source / Replaced By must be blank except on 1-/2- parts (c10) ==');
+{
+  const aoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Source', 'Replaced by'],
+    ['MACH-01', '-', 'Main Machine', '', ''],
+    ['7-100-0001', '1', 'Own part, clean', '', ''],
+    ['7-100-0002', '2', 'Own part, Source set', 'Buy', ''],
+    ['7-100-0003', '3', 'Own part, Replaced By set', '', '7-100-0099'],
+    ['7-100-0004', '4', 'Own part, both set', 'Make', '7-100-0098'],
+    ['1-200-0001', '5', 'Other-site 1- part, Source set', 'Buy', ''],
+    ['2-200-0001', '6', 'Other-site 2- part, Replaced By set', '', '2-200-0099'],
+    ['3-200-0001', '7', 'Other-site 3- part, NOT exempt, Source set', 'Buy', ''],
+    ['7-909-00001', '8', 'END OF LINE', 'Buy', ''], // ERP marker, never flagged
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => aoa } });
+  check('Source / Replaced by columns captured', im.hasSource === true && im.hasReplacedBy === true &&
+    im.rows[2].source === 'Buy' && im.rows[3].replacedBy === '7-100-0099', { r2: im.rows[2], r3: im.rows[3] });
+
+  const qc = imQc.runChecks(im);
+  check('c10 applicable once either column exists', qc.c10.applicable === true, qc.c10);
+  check('c10 flags every non-blank Source/Replaced By except on exempt prefixes, 4 hits',
+    qc.c10.fail.length === 4 && ['7-100-0002', '7-100-0003', '7-100-0004', '3-200-0001'].every(
+      n => qc.c10.fail.some(f => f.number === n)), qc.c10.fail.map(f => f.number));
+  check('c10 exempts 1- and 2- parts even with values set',
+    !qc.c10.fail.some(f => f.number === '1-200-0001' || f.number === '2-200-0001'), qc.c10.fail.map(f => f.number));
+  check('c10 still flags a 3- part — only 1-/2- are exempt, not every non-7- prefix',
+    qc.c10.fail.some(f => f.number === '3-200-0001'), qc.c10.fail.map(f => f.number));
+  check('c10 never flags the END OF LINE marker', !qc.c10.fail.some(f => f.number === '7-909-00001'),
+    qc.c10.fail.map(f => f.number));
+  check('c10 names which field(s) were non-blank', qc.c10.fail.find(f => f.number === '7-100-0004').issue ===
+    'Source "Make"; Replaced By "7-100-0098" not blank', qc.c10.fail.find(f => f.number === '7-100-0004').issue);
+
+  const noCols = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } },
+    { utils: { sheet_to_json: () => aoa.map(r => r.slice(0, 3)) } });
+  check('c10 not-applicable when neither column exists',
+    noCols.hasSource === false && noCols.hasReplacedBy === false &&
+    imQc.runChecks(noCols).c10.applicable === false, noCols.columns);
+
+  // "Source Item" is a different, real Vault column (the originating/master
+  // item a row was copied from) and must never be mistaken for "Source".
+  const sourceItemAoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Source Item'],
+    ['7-100-0005', '1', 'Has a Source Item, not a Source', 'SOME-OTHER-ITEM'],
+  ];
+  const sourceItemIm = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => sourceItemAoa } });
+  check('"Source Item" is not captured as "Source"', sourceItemIm.hasSource === false, sourceItemIm.columns);
+}
+
 console.log('\n== synthetic: findings registry (one primary finding per part) ==');
 {
   // A part flagged by several checks should be reported once, owned by the
@@ -2216,6 +2292,10 @@ console.log('\n== synthetic: folder auto-load file classification ==');
     ['Inventor BOM - 726020768.xls', 'inventor-bom'],              // case-insensitive, spacing variant
     ['inventor-bom-726020768.xlsx', 'inventor-bom'],
     ['INVENTOR_BOM_726020768.docx', null],                         // right prefix, wrong extension
+    ['VAULT_BOM_7-230-20526.xls', 'vault-bom'],                    // real sample naming
+    ['Vault BOM - 723020509.xlsx', 'vault-bom'],                   // case-insensitive, spacing variant
+    ['vault-bom-723020509.xls', 'vault-bom'],
+    ['VAULT_BOM_7-230-20526.docx', null],                          // right prefix, wrong extension
   ];
   for (const [name, expected] of cases) {
     check('classifyFolderFile(' + JSON.stringify(name) + ') = ' + expected,
@@ -2234,6 +2314,7 @@ console.log('\n== synthetic: folder auto-load file classification ==');
   }
   const mockEntries = [
     { kind: 'file', name: 'Autodesk Vault- 723020509.pdf', getFile: async () => ({ name: 'Autodesk Vault- 723020509.pdf' }) },
+    { kind: 'file', name: 'VAULT_BOM_723020509.xls', getFile: async () => ({ name: 'VAULT_BOM_723020509.xls' }) },
     { kind: 'file', name: 'EBOM_723020509.xlsx', getFile: async () => ({ name: 'EBOM_723020509.xlsx' }) },
     { kind: 'file', name: 'INVENTOR_BOM_723020509.xlsx', getFile: async () => ({ name: 'INVENTOR_BOM_723020509.xlsx' }) },
     { kind: 'file', name: 'notes.txt', getFile: async () => ({ name: 'notes.txt' }) },
@@ -2241,9 +2322,12 @@ console.log('\n== synthetic: folder auto-load file classification ==');
   ];
   const found = await folder.scanFolder(mockDir(mockEntries));
   check('scanFolder finds exactly 1 cad-pdf', found['cad-pdf'].length === 1 && found['cad-pdf'][0].name === 'Autodesk Vault- 723020509.pdf', found['cad-pdf']);
+  check('scanFolder finds exactly 1 vault-bom, distinct from cad-pdf',
+    found['vault-bom'].length === 1 && found['vault-bom'][0].name === 'VAULT_BOM_723020509.xls', found['vault-bom']);
   check('scanFolder finds exactly 1 item-master', found['item-master'].length === 1 && found['item-master'][0].name === 'EBOM_723020509.xlsx', found['item-master']);
   check('scanFolder finds exactly 1 inventor-bom', found['inventor-bom'].length === 1 && found['inventor-bom'][0].name === 'INVENTOR_BOM_723020509.xlsx', found['inventor-bom']);
-  check('scanFolder ignores directories and unmatched files', found['cad-pdf'].length + found['item-master'].length + found['inventor-bom'].length === 3);
+  check('scanFolder ignores directories and unmatched files',
+    found['cad-pdf'].length + found['vault-bom'].length + found['item-master'].length + found['inventor-bom'].length === 4);
 
   // ambiguous folder (two EBOM files) -> both bucketed, caller decides what to do
   const ambiguousEntries = mockEntries.concat([

@@ -795,6 +795,10 @@
       desc: 'A released BOM should contain Certified items only. Obsolete, Invalid and Phased Out are errors — the part was released against a dead revision. "New" is shown as a warning, not a failure.',
       cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
         [['title', 'Title'], ['state', 'State'], ['severity', 'Severity']]) },
+    { key: 'c10', title: 'Source / Replaced By',
+      desc: 'Source and Replaced By should be blank on every row — this site does not track Make/Buy sourcing or supersession on its own parts. "1-" and "2-" numbered parts are excluded (procured from other locations that do use these fields).',
+      cols: [['number', 'Number'], ['rowOrder', 'Row Order']].concat(LOCATION_COLS).concat(
+        [['title', 'Title'], ['source', 'Source'], ['replacedBy', 'Replaced By'], ['issue', 'Issue']]) },
   ];
 
   function hideImQc() {
@@ -3351,7 +3355,26 @@
       return;
     }
 
-    const cadMsg = await loadFolderMatch(found['cad-pdf'], 'CAD BOM PDF', function (f) { return handleFiles('cad', [f]); }, false);
+    // The Vault desktop-client export (VAULT_BOM_*.xls) is preferred over the
+    // PDF when both are present: PDF text extraction has proven the less
+    // reliable of the two. Both play the same 'structure' role (see
+    // compare.js's isCadStructureSource), so loading the PDF and then this
+    // file would just have this file silently replace it in that slot a
+    // moment later — instead, skip the PDF attempt entirely so its (possibly
+    // misleading) status message never appears. An ambiguous Vault BOM match
+    // falls back to the normal PDF attempt rather than loading neither.
+    let cadMsg;
+    const vaultBomEntries = found['vault-bom'];
+    if (vaultBomEntries.length === 1) {
+      const file = await vaultBomEntries[0].getFile();
+      await handleFiles('cad', [file]);
+      cadMsg = file.name + ' (Vault desktop export, preferred over PDF)';
+    } else {
+      cadMsg = await loadFolderMatch(found['cad-pdf'], 'CAD BOM PDF', function (f) { return handleFiles('cad', [f]); }, false);
+      if (vaultBomEntries.length > 1) {
+        cadMsg += ' · ' + vaultBomEntries.length + ' possible Vault desktop BOM files (VAULT_BOM_*) also found — ambiguous, drop the right one manually to prefer it over the PDF';
+      }
+    }
     const imMsg = await loadFolderMatch(found['item-master'], 'Item Master (EBOM_*)', function (f) { return handleFiles('im', [f]); }, false);
     const invMsg = await loadFolderMatch(found['inventor-bom'], 'Inventor BOM export (INVENTOR_BOM_*)', function (f) { return handleFiles('cad', [f]); }, true);
     const lldboMsg = await loadFolderMatch(found['lldbo'], 'LLDBO file', handleLldboFile, true);

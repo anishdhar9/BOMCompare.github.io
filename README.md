@@ -38,8 +38,10 @@ security reasons. The closest match is the **File System Access API**.
 Click **📁 Load from folder**. Select the PNxxxx project folder one time, in the native OS
 picker. The app then does the rest automatically:
 
-- It finds the CAD BOM (`Autodesk Vault- <assembly>.pdf`, or Vault's default name
-  `Autodesk_Vault__<assembly>.iam.pdf`), the Item Master (`EBOM_<assembly>.xlsx`), the
+- It finds the CAD BOM — preferring Vault's desktop-client export (`VAULT_BOM_<assembly>.xls`)
+  when present, since PDF text extraction has proven the less reliable of the two; otherwise
+  the PDF (`Autodesk Vault- <assembly>.pdf`, or Vault's default name
+  `Autodesk_Vault__<assembly>.iam.pdf`) — the Item Master (`EBOM_<assembly>.xlsx`), the
   Inventor BOM export (`INVENTOR_BOM_<assembly>.xlsx`, an optional second CAD source), and
   the long-lead parts list, if present (`PNxxxx_LLDBO.xlsx`).
 - It loads every file it finds, runs the comparisons, and writes
@@ -120,6 +122,12 @@ buttons down the row-header margin in Excel) — common when someone expands/col
 BOM tree in Excel before saving. The app reads that per-row outline depth straight from the
 file (`.xls` and `.xlsx` both), the same way it reads x-offsets from the PDF, and only
 falls back to "no hierarchy" when the file carries no outline levels at all.
+
+Both this export and any other leveled CAD table also carry `Source`/`Replaced By` through
+to each part (`hasVaultSource`/`hasReplacedBy`), when those columns are included — but
+nothing validates them on the CAD side yet. Today's "must be blank" check (below) only runs
+on the Item Master, where it's an established data-quality section; a CAD-side version would
+need its own results panel, which doesn't exist yet.
 
 ### Item Master BOM (right box)
 
@@ -224,7 +232,7 @@ Severity order, most serious first:
 | 11 | Material mismatch vs CAD |
 | 12 | Description mismatch vs CAD |
 | 13 | In Item Master only |
-| 14 | Item Master data-quality checks (Quantity vs Item Qty, Revision consistency, Material, Title/Description, Entity Icon, Producer, End of Line) |
+| 14 | Item Master data-quality checks (Source/Replaced By, Quantity vs Item Qty, Revision consistency, Material, Title/Description, Entity Icon, Producer, End of Line) |
 | 15 | Not yet certified (`New` state), ranked low so it cannot hide a real finding |
 
 A **Parts needing attention** table sits at the top of the page. It shows one row per part,
@@ -327,6 +335,13 @@ with other fields on the same row. This is a different failure mode from CAD-vs-
    check reads the Item Master's `State` column, which the app carefully separates from the
    neighboring `File Link State` (Current or Out of Date) and `State (Historical)` columns.
    Those two columns describe the CAD file link, not the item.
+10. **Source / Replaced By**: both should be blank on every row, when the export carries
+    either column. This site does not track Make/Buy-style sourcing or item supersession on
+    its own parts. `1-` and `2-` numbered parts are excluded — procured from other locations
+    that do use these fields — but this is a **narrower** exception than checks 5/6's general
+    "not `7-`" rule: a `3-` or `5-` part is still flagged if Source or Replaced By is set,
+    since only `1-`/`2-` parts are known to legitimately carry this data. The app reports
+    which of the two fields was non-blank.
 
 Checks 8 and 9 each get their own summary box. Any hit on either check also raises a 🚨
 banner above the detail sections.

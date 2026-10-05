@@ -6,10 +6,12 @@
  *
  * Produces: { kind:'itemmaster', rows:[{number,title,description,qty,
  *             itemQty,quantity,quantityText,producer,producerNumber,
- *             entityIcon,material,revision,state,path,rowType,sourceRow}],
+ *             entityIcon,material,revision,state,source,replacedBy,path,
+ *             rowType,sourceRow}],
  *             hasPaths, hasEntityIcon, hasProducer, hasMaterial,
- *             hasRevision, hasItemQty, hasQuantity, hasState,
- *             projectKey:{spn,pn}|null, sheetName, columns, warnings }
+ *             hasRevision, hasItemQty, hasQuantity, hasState, hasSource,
+ *             hasReplacedBy, projectKey:{spn,pn}|null, sheetName, columns,
+ *             warnings }
  *
  * `qty` is the resolved quantity used by compare.js's roll-up. Some exports
  * carry up to three quantity-ish columns -- "Item Quantity", "Quantity",
@@ -93,6 +95,15 @@
     // `stateOther` so the longest-prefix rule in matchField keeps them out.
     state: ['state', 'item state', 'lifecycle state'],
     stateOther: ['file link state', 'state (historical)', 'vault status', 'file state'],
+    // Make/Buy-style sourcing and supersession, both normally expected blank
+    // on this site's own parts -- see imqc.js's Check 10.
+    source: ['source'],
+    // "Source Item" is a distinct Vault column (the originating/master item a
+    // row was copied from; also one of detect.js's Item-Master signature
+    // keywords) -- listed here only so the longest-prefix rule in matchField
+    // keeps it from being mistaken for the "Source" field above.
+    sourceOther: ['source item'],
+    replacedBy: ['replaced by', 'replacedby'],
     // recognized only so it counts toward the header-row marker check below;
     // not a field this parser captures into row data.
     marker: ['category name'],
@@ -148,6 +159,8 @@
           material: at('material'),
           revision: at('revision'),
           state: at('state'),
+          source: at('source'),
+          replacedBy: at('replacedBy'),
         },
       };
     }
@@ -213,6 +226,8 @@
           material: hdr.cols.material >= 0 ? cellText(row[hdr.cols.material]) : '',
           revision: hdr.cols.revision >= 0 ? cellText(row[hdr.cols.revision]) : '',
           state: hdr.cols.state >= 0 ? cellText(row[hdr.cols.state]) : '',
+          source: hdr.cols.source >= 0 ? cellText(row[hdr.cols.source]) : '',
+          replacedBy: hdr.cols.replacedBy >= 0 ? cellText(row[hdr.cols.replacedBy]) : '',
           path: hdr.cols.path >= 0 ? parsePath(row[hdr.cols.path]) : null,
           rowType: hdr.cols.rowType >= 0 ? cellText(row[hdr.cols.rowType]) : '',
           sourceRow: r + 1,
@@ -238,6 +253,8 @@
         hasItemQty: hdr.cols.qty >= 0,
         hasQuantity: hdr.cols.qtyFallback >= 0,
         hasState: hdr.cols.state >= 0,
+        hasSource: hdr.cols.source >= 0,
+        hasReplacedBy: hdr.cols.replacedBy >= 0,
         projectKey: extractProjectKey(rootRow),
         columns: hdr.cols,
         warnings: warnings,
