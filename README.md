@@ -466,6 +466,35 @@ grade-equivalence lookup. A mismatch appears both as its own row in the "Revisio
 mismatches" summary card, and in this section's detail table, with the same Row # and
 parent-assembly context as every other check.
 
+## Ignore List
+
+Optional. Drop an `IgnoreList*` file (`.xls`/`.xlsx`, `Part Number` + `From` columns) in its
+own dropzone to suppress specific parts from specific checks — for a part intentionally left
+in a non-standard state (still Reference, a WIP/sketch placeholder, an accepted known
+quantity discrepancy) that would otherwise keep getting flagged.
+
+The `From` column names which check(s) to suppress the part from:
+
+| `From` value | Suppresses |
+|---|---|
+| `CAD vs Item compare` | Missing, Reference, Quantity, Quantity Cascade, In Item Master only (together) |
+| `Quantity Mismatch` | Just the quantity checks (Quantity, Quantity Cascade) — the part is still flagged if genuinely missing/reference/Item-Master-only |
+| `Revision` | Revision: CAD vs Item Master |
+| `LLDBO Candidate` | The LLDBO-candidate check, both confidence tiers |
+| `All` | Every check above, **plus** Material: CAD vs Item Master, Description: CAD vs Item Master, Virtual Parts, both LLDBO checks (missing-from-IM and quantity), and every Item Master QC check **except** Check 8 and Check 9 |
+
+`All` does not reach Checks 8 and 9 (sketch part in the Item Master; obsolete or invalid
+state) under any circumstance. Both are release-blocking — the app deliberately gives the
+Ignore List no way to suppress either, so a stale Ignore List entry can never hide a genuine
+release blocker. Every other check can be suppressed through `All`, even though several of
+them (Material, Description, Virtual Parts, both LLDBO checks, and most of the Item Master
+QC checks) have no narrower, dedicated `From` value of their own.
+
+A `From` value the app doesn't recognize is reported, not silently ignored — a warning names
+the unrecognized rows and lists the five values above. Suppressed parts aren't just dropped:
+they're listed in the collapsible "Ignored findings" section near the bottom of the page, for
+an audit trail of what's being hidden and why.
+
 ## Long-Lead Parts (LLDBO)
 
 This check is optional. Drop a `PNxxxx_LLDBO` file in its own dropzone, below the Item

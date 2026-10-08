@@ -10,11 +10,15 @@
  * (Entity Icon) isn't present in a given export, rather than flagging every
  * row as failing.
  *
- * Produces: { c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 }, each either
- *   { applicable: true, fail: [...] }  or
+ * Produces: { c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, total, ignoredFindings },
+ * each check either { applicable: true, fail: [...] } or
  *   { applicable: false, reason: string }
  * c9 additionally carries { errorCount, warnCount } so the UI can show amber
- * for "not yet certified" without calling it a failure.
+ * for "not yet certified" without calling it a failure. runChecks(im, opts)
+ * takes an optional { isIgnored(pn, checkKey) } (js/ignorelist-compare.js) —
+ * every check except c8/c9 (release-blocking, never ignorable) is filtered
+ * through it, with what got suppressed collected into ignoredFindings for
+ * the "Ignored findings" panel.
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
@@ -474,9 +478,41 @@
     return { applicable: true, fail: fail };
   }
 
-  function runChecks(im) {
+  // Suppresses rows the Ignore List flags for this check's own key (see
+  // js/ignorelist-compare.js's isIgnored(pn, checkKey)), collecting what got
+  // suppressed into `collector` for the "Ignored findings" panel. A tiny
+  // local copy of compare.js's filterIgnoredFlat -- kept inline (not
+  // required) to keep this module dependency-free, same as buildPathIndex
+  // above.
+  function filterIgnored(fail, checkKey, isIgnored, collector) {
+    var kept = [];
+    for (var i = 0; i < fail.length; i++) {
+      var f = fail[i];
+      if (isIgnored(f.number, checkKey)) {
+        collector.push({
+          checkKey: checkKey, number: f.number, title: f.title || '', description: '',
+          sourceRow: f.sourceRow || '', parentNumber: f.parentNumber || '', parentTitle: f.parentTitle || '',
+        });
+      } else {
+        kept.push(f);
+      }
+    }
+    return kept;
+  }
+
+  // Checks 8 and 9 are deliberately EXCLUDED from Ignore List filtering: they
+  // are this app's two release-blocking checks (a sketch part reaching the
+  // Item Master; a part released against an obsolete/invalid state), and a
+  // stale Ignore List row must never be able to silently hide a genuine
+  // release blocker. Every other check can be suppressed via the "All"
+  // category (js/ignorelist-compare.js) -- there is no per-check named
+  // category for these, "All" is the only "From" value that reaches them.
+  var IGNORABLE_CHECKS = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c10'];
+
+  // opts (optional): { isIgnored(pn, checkKey) } from js/ignorelist-compare.js.
+  function runChecks(im, opts) {
     var pathIndex = buildPathIndex(im.rows);
-    return {
+    var results = {
       c1: checkProducerMatch(im),
       c2: checkEndOfLine(im, pathIndex),
       c3: checkQuantityVsItemQty(im, pathIndex),
@@ -489,6 +525,17 @@
       c10: checkSourceReplacedBy(im, pathIndex),
       total: im.rows.length,
     };
+    var isIgnored = opts && opts.isIgnored;
+    var ignoredFindings = [];
+    if (isIgnored) {
+      for (var i = 0; i < IGNORABLE_CHECKS.length; i++) {
+        var key = IGNORABLE_CHECKS[i];
+        var result = results[key];
+        if (result.fail) result.fail = filterIgnored(result.fail, key, isIgnored, ignoredFindings);
+      }
+    }
+    results.ignoredFindings = ignoredFindings;
+    return results;
   }
 
   return {

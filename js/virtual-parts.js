@@ -48,8 +48,16 @@
   }
 
   // cadSources: the array passed to compareAll (1-2 parsed CAD results).
-  function detectVirtualParts(cadSources, im, indexItemMaster) {
+  // opts (optional): { isIgnored(pn, checkKey) } from js/ignorelist-compare.js
+  // — injected rather than required, matching this module's existing
+  // dependency-injection style (see indexItemMaster above). Suppressing a
+  // virtual part also drops its anchorRows entry, so its children fall back
+  // to ordinary individual "In Item Master only" findings instead of being
+  // silently grouped under a parent that no longer reads as a finding.
+  function detectVirtualParts(cadSources, im, indexItemMaster, opts) {
     const sources = cadSources || [];
+    const isIgnored = opts && opts.isIgnored;
+    const ignoredFindings = [];
     const imIndex = indexItemMaster(im);
 
     if (!im.rows.some(function (r) { return Array.isArray(r.path); })) {
@@ -104,6 +112,14 @@
       const parentRows = imIndex.byNumber.get(parentPn);
       if (!parentRows || !parentRows.length) return;
       const parentRow = parentRows[0];
+      if (isIgnored && isIgnored(parentPn, 'virtualPart')) {
+        ignoredFindings.push({
+          checkKey: 'virtualPart', number: parentRow.number, title: parentRow.title || '',
+          description: parentRow.description || '', sourceRow: parentRow.sourceRow || '',
+          parentNumber: '', parentTitle: '',
+        });
+        return;
+      }
       const entry = {
         number: parentRow.number,
         title: parentRow.title || '',
@@ -137,6 +153,7 @@
       confirmed: confirmed,
       suspected: suspected,
       anchorRows: anchorRows,
+      ignoredFindings: ignoredFindings,
       reason: hasThumbnailColumn ? '' :
         'No "Thumbnail" column in the CAD export, so these are inferred from BOM structure. ' +
         'Include the Thumbnail column in the Inventor BOM export for an exact answer.',

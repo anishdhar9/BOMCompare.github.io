@@ -417,6 +417,16 @@
     updateCompareButton();
   }
 
+  // Re-run whenever the Item Master (re)loads or the Ignore List changes —
+  // see applyIgnoreListChange(). A no-op (state.imQc stays null) if the Item
+  // Master itself is not loaded.
+  function runImQc() {
+    if (!state.im) { state.imQc = null; return; }
+    const ignoreIdx = BC.ignoreListCompare.buildIgnoreIndex(state.ignoreList);
+    state.imQc = BC.imQc.runChecks(state.im, { isIgnored: ignoreIdx.isIgnored });
+    renderImQc();
+  }
+
   function handleImWorkbook(file, wb) {
     const im = BC.detect.parseItemMasterFromWorkbook(wb, XLSX);
     if (!im) {
@@ -436,8 +446,7 @@
     if (im.cadShaped) {
       notice('warn', 'The file in the Item Master box looks like it might be a CAD BOM export (it has CAD-only columns such as "File"/"Thumbnail"/"BOM Structure"). If that was a mistake, drop it on the CAD BOM box on the left instead.');
     }
-    state.imQc = BC.imQc.runChecks(im);
-    renderImQc();
+    runImQc();
     runLldboCheck(); // runs even without an LLDBO file yet — shows candidate parts as a preview
     runMaterialCheck();
     runRevisionCheck();
@@ -567,14 +576,19 @@
     }
   }
 
-  // The ignore list only takes effect through compareAll(), compareRevision()
-  // and detectLldboCandidates() (see js/compare.js, js/revision-compare.js,
-  // js/lldbo-compare.js and js/ignorelist-compare.js), so re-applying it
-  // after a change means re-running all three, not just re-rendering stale
-  // results — the same runCompare() the "Compare BOMs" button and folder
-  // auto-load use, plus runRevisionCheck()/runLldboCheck() (harmless no-ops
-  // if no Item Master is loaded yet).
+  // The ignore list only takes effect through each check's own isIgnored
+  // filtering (js/imqc.js, js/material-compare.js, js/titledesc-compare.js,
+  // js/virtual-parts.js and js/compare.js's compareAll(), js/revision-
+  // compare.js, js/lldbo-compare.js — all via js/ignorelist-compare.js), so
+  // re-applying it after a change means re-running every one of them, not
+  // just re-rendering stale results. Each run* function here is a harmless
+  // no-op if its own file (Item Master, in every case) is not loaded yet.
+  // Check 8/9 (release-blocking) are never filtered, so runImQc() has
+  // nothing to re-apply for those two either way.
   function applyIgnoreListChange() {
+    runImQc();
+    runMaterialCheck();
+    runTitleDescCheck();
     runRevisionCheck();
     runLldboCheck();
     if (state.result) runCompare();
@@ -1321,18 +1335,34 @@
   // review/audit list, not something needing action. Only visible once
   // there's something that could be suppressing a finding — before that
   // there's nothing to show.
+  // Every module that filters through the Ignore List (js/ignorelist-
+  // compare.js) collects what it suppressed into its own ignoredFindings —
+  // this merges all of them for the "Ignored findings" panel and the
+  // exported workbook sheet. Check 8/9 are never in here: they're never
+  // filtered in the first place (see js/imqc.js's IGNORABLE_CHECKS).
+  function allIgnoredFindings() {
+    return ((state.result && state.result.ignoredFindings) || [])
+      .concat((state.revisionResult && state.revisionResult.ignoredFindings) || [])
+      .concat((state.lldboCandidatesResult && state.lldboCandidatesResult.ignoredFindings) || [])
+      .concat((state.lldboResult && state.lldboResult.ignoredFindings) || [])
+      .concat((state.imQc && state.imQc.ignoredFindings) || [])
+      .concat((state.materialResult && state.materialResult.ignoredFindings) || [])
+      .concat((state.titleDescResult && state.titleDescResult.ignoredFindings) || [])
+      .concat((state.virtualResult && state.virtualResult.ignoredFindings) || []);
+  }
+
   function renderIgnoredFindings() {
     const sec = $('ignored-findings');
     const body = $('ignored-findings-body');
     body.innerHTML = '';
     if (!state.ignoreList && !state.ignoreBoughtOutRevision) { sec.classList.add('hidden'); return; }
     sec.classList.remove('hidden');
-    const list = ((state.result && state.result.ignoredFindings) || [])
-      .concat((state.revisionResult && state.revisionResult.ignoredFindings) || [])
-      .concat((state.lldboCandidatesResult && state.lldboCandidatesResult.ignoredFindings) || []);
+    const list = allIgnoredFindings();
     $('ignored-findings-count').textContent = list.length + ' SUPPRESSED';
+    const anyRun = state.result || state.revisionResult || state.imQc || state.materialResult ||
+      state.titleDescResult || state.virtualResult || state.lldboResult || state.lldboCandidatesResult;
     if (!list.length) {
-      body.innerHTML = '<div class="empty-state">' + (state.result || state.revisionResult
+      body.innerHTML = '<div class="empty-state">' + (anyRun
         ? 'No currently-flaggable part matches the Ignore List — nothing is being suppressed right now.'
         : 'Run "Compare BOMs" to apply the Ignore List.') + '</div>';
       return;
@@ -1491,8 +1521,10 @@
       hideLldboResults();
       return;
     }
-    state.lldboResult = state.lldbo ? BC.lldboCompare.compareLldbo(state.lldbo, state.im, BC.indexItemMaster) : null;
     const ignoreIdx = BC.ignoreListCompare.buildIgnoreIndex(state.ignoreList);
+    state.lldboResult = state.lldbo
+      ? BC.lldboCompare.compareLldbo(state.lldbo, state.im, BC.indexItemMaster, { isIgnored: ignoreIdx.isIgnored })
+      : null;
     state.lldboCandidatesResult = BC.lldboCompare.detectLldboCandidates(state.im, state.lldbo, { isIgnored: ignoreIdx.isIgnored });
     renderLldboPanel();
   }
@@ -1725,7 +1757,8 @@
 
   function runMaterialCheck() {
     if (!state.im) { state.materialResult = null; hideMaterialResults(); return; }
-    state.materialResult = BC.materialCompare.compareMaterial(state.cadSources, state.im);
+    const ignoreIdx = BC.ignoreListCompare.buildIgnoreIndex(state.ignoreList);
+    state.materialResult = BC.materialCompare.compareMaterial(state.cadSources, state.im, { isIgnored: ignoreIdx.isIgnored });
     renderMaterialPanel();
     if (state.imQc) renderImQc(); // Check 6's card reflects state.materialResult too — see relatedWarningFor()
   }
@@ -1959,7 +1992,8 @@
 
   function runTitleDescCheck() {
     if (!state.im) { state.titleDescResult = null; hideTitleDescResults(); return; }
-    state.titleDescResult = BC.titleDescCompare.compareTitleDescription(state.cadSources, state.im);
+    const ignoreIdx = BC.ignoreListCompare.buildIgnoreIndex(state.ignoreList);
+    state.titleDescResult = BC.titleDescCompare.compareTitleDescription(state.cadSources, state.im, { isIgnored: ignoreIdx.isIgnored });
     renderTitleDescPanel();
   }
 
@@ -2112,8 +2146,9 @@
     // Virtual parts are detected first: their anchors let the "In Item Master
     // only" rollup group a virtual subassembly's orphaned children under it,
     // instead of scattering them as one unexplained finding each.
-    state.virtualResult = BC.virtualParts.detectVirtualParts(state.cadSources, state.im, BC.indexItemMaster);
     const ignoreIdx = BC.ignoreListCompare.buildIgnoreIndex(state.ignoreList);
+    state.virtualResult = BC.virtualParts.detectVirtualParts(state.cadSources, state.im, BC.indexItemMaster,
+      { isIgnored: ignoreIdx.isIgnored });
     state.result = BC.compareAll(state.cadSources, state.im,
       { virtualAnchorRows: state.virtualResult.anchorRows, isIgnored: ignoreIdx.isIgnored });
     const res = state.result;
@@ -3191,9 +3226,7 @@
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lldboSheetRows(state.lldboResult, state.lldboCandidatesResult)), 'LLDBO check');
     }
 
-    const allIgnored = (res.ignoredFindings || [])
-      .concat((state.revisionResult && state.revisionResult.ignoredFindings) || [])
-      .concat((state.lldboCandidatesResult && state.lldboCandidatesResult.ignoredFindings) || []);
+    const allIgnored = allIgnoredFindings();
     if (allIgnored.length) {
       const ignored = [['Part Number', 'Title', 'Description', 'Would have been flagged as', 'Row #', 'Parent Number', 'Parent Title']];
       for (const r of allIgnored) {

@@ -24,12 +24,12 @@
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = factory(require('./imqc.js').imQc);
+    module.exports = factory(require('./imqc.js').imQc, require('./compare.js'));
   } else {
     const bc = root.BOMCompare || {};
-    root.BOMCompare = Object.assign(bc, factory(bc.imQc));
+    root.BOMCompare = Object.assign(bc, factory(bc.imQc, bc));
   }
-})(typeof self !== 'undefined' ? self : this, function (imQc) {
+})(typeof self !== 'undefined' ? self : this, function (imQc, compareLib) {
   'use strict';
 
   // Same substance, different-language spelling of special characters --
@@ -178,7 +178,10 @@
   }
 
   // cadSources: the array passed to compareAll (0-2 CAD sources).
-  function compareMaterial(cadSources, im) {
+  // opts (optional): { isIgnored(pn, checkKey) } from js/ignorelist-compare.js
+  // — filters `mismatches` only, never the Bought-Out Parts reference panel
+  // (it was never a finding to begin with).
+  function compareMaterial(cadSources, im, opts) {
     var cad = cadMaterialByPn(cadSources || []);
     if (!cad) {
       return {
@@ -238,11 +241,16 @@
       });
     });
 
+    var ignoredFindings = [];
+    var isIgnored = opts && opts.isIgnored;
+    if (isIgnored) mismatches = compareLib.filterIgnoredFlat(mismatches, isIgnored, 'material', ignoredFindings);
+
     return {
       applicable: true,
       cadSourceFileName: cad.sources.map(function (s) { return s.fileName || ''; }).filter(Boolean).join(', '),
       mismatches: mismatches,
       boughtOut: boughtOut,
+      ignoredFindings: ignoredFindings,
     };
   }
 

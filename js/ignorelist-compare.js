@@ -24,10 +24,10 @@
     return String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
   }
 
-  // "From" text (as written in the Ignore List) -> which of compareAll()'s
-  // check keys it suppresses. "cad vs item compare" is the broad, catch-all
-  // category (covers all five); "quantity mismatch" is a narrower one for a
-  // part that should still be flagged if genuinely missing/reference/
+  // "From" text (as written in the Ignore List) -> which check keys it
+  // suppresses. "cad vs item compare" is the broad, catch-all category over
+  // compareAll()'s five; "quantity mismatch" is a narrower one for a part
+  // that should still be flagged if genuinely missing/reference/
   // in-Item-Master-only, but has an accepted, known quantity discrepancy
   // that shouldn't keep getting reported — this also covers "qtyCascade"
   // (compareAll()'s grouped root-cause finding for a whole subtree released
@@ -38,26 +38,31 @@
   // candidate" suppresses a part from the LLDBO-candidate check
   // (js/lldbo-compare.js's detectLldboCandidates(), also a separate module,
   // both confidence tiers) — for a keyword hit someone has confirmed is not
-  // actually a long-lead part; "all" (below) is broader still — literally
-  // everything the ignore list currently knows how to suppress. These are
-  // independent — a part can be listed under any one or combination. Item
-  // Master QC / Material / Description / Virtual Parts checks aren't wired
-  // to the ignore list yet. Add a new category here (and to the
-  // recognized-values text in app.js's warning message) if a "From" value
-  // for one of those is needed later — "all" picks it up automatically.
+  // actually a long-lead part. These are independent — a part can be listed
+  // under any one or combination.
   const CATEGORIES = {
     'cad vs item compare': ['missing', 'reference', 'qty', 'qtyCascade', 'imOnly'],
     'quantity mismatch': ['qty', 'qtyCascade'],
     'revision': ['revision'],
     'lldbo candidate': ['lldboCandidate'],
   };
-  // "All" suppresses everything the ignore list can currently suppress for a
-  // part — the union of every category above, computed rather than
-  // hardcoded so it can never drift out of sync if a category is added.
-  CATEGORIES.all = Array.from(Object.keys(CATEGORIES).reduce(function (set, cat) {
-    for (const k of CATEGORIES[cat]) set.add(k);
-    return set;
-  }, new Set()));
+  // "All" suppresses a part from every check the ignore list can reach —
+  // EXCEPT Check 8 (sketch part reached the Item Master) and Check 9 (item
+  // released against an obsolete/invalid state). Those two stay un-ignorable
+  // on purpose: they are this app's two release-blocking checks, and a stale
+  // Ignore List row must never be able to silently hide a genuine release
+  // blocker. Unlike the categories above, "all" is NOT a union of them —
+  // material, titleDesc, virtualPart, lldboMissing, lldboQty, and most of
+  // imqc.js's checks (c1-c7, c10) have no dedicated named category of their
+  // own, so this hardcoded list is the only "From" value that reaches them.
+  // Add a new key here (and to the recognized-values text in app.js's
+  // warning message, if it also gets its own named category) whenever a
+  // module gains ignore-list support.
+  CATEGORIES.all = [
+    'missing', 'reference', 'qty', 'qtyCascade', 'imOnly', 'revision', 'lldboCandidate',
+    'material', 'titleDesc', 'virtualPart', 'lldboMissing', 'lldboQty',
+    'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c10', // NOT c8/c9 — release-blocking
+  ];
 
   // Returns { isIgnored(pn, checkKey), byPn: Map<PN, Set<checkKey>>, unrecognized:[{number, from, sourceRow}] }.
   function buildIgnoreIndex(ignoreList) {

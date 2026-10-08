@@ -1363,6 +1363,17 @@ console.log('\n== synthetic: Ignore List — parsing and category mapping ==');
     idxAll.isIgnored('IGNORED-ALL', 'revision'));
   check('"All" also covers lldboCandidate — proves the computed union stayed in sync when the category was added',
     idxAll.isIgnored('IGNORED-ALL', 'lldboCandidate'));
+
+  // "All" reaches every OTHER check too — material, description, virtual
+  // parts, LLDBO missing/qty, and every Item Master QC check except the two
+  // release-blocking ones, none of which have a dedicated named category of
+  // their own (only "All" can suppress them).
+  check('"All" covers material / titleDesc / virtualPart / lldboMissing / lldboQty',
+    ['material', 'titleDesc', 'virtualPart', 'lldboMissing', 'lldboQty'].every(k => idxAll.isIgnored('IGNORED-ALL', k)));
+  check('"All" covers imqc checks c1-c7 and c10',
+    ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c10'].every(k => idxAll.isIgnored('IGNORED-ALL', k)));
+  check('"All" does NOT cover c8/c9 — release-blocking, never ignorable',
+    !idxAll.isIgnored('IGNORED-ALL', 'c8') && !idxAll.isIgnored('IGNORED-ALL', 'c9'));
 }
 
 console.log('\n== synthetic: Ignore List suppresses compareAll() findings, with child promotion ==');
@@ -2118,6 +2129,141 @@ console.log('\n== synthetic: Source / Replaced By must be blank except on 1-/2- 
   ];
   const sourceItemIm = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => sourceItemAoa } });
   check('"Source Item" is not captured as "Source"', sourceItemIm.hasSource === false, sourceItemIm.columns);
+
+  // Ignore List wiring ("All" -> every check except c8/c9): c10's own fail
+  // list respects isIgnored, c8/c9 never do, even under "All".
+  const ignoreAll = ignoreListCompare.buildIgnoreIndex({
+    rows: [{ number: '7-100-0002', from: 'All', sourceRow: 1 }],
+  });
+  const qcIgnored = imQc.runChecks(im, { isIgnored: ignoreAll.isIgnored });
+  check('c10: an "All"-ignored part is dropped from fail, and recorded in ignoredFindings',
+    !qcIgnored.c10.fail.some(f => f.number === '7-100-0002') &&
+    qcIgnored.ignoredFindings.some(f => f.number === '7-100-0002' && f.checkKey === 'c10'),
+    { fail: qcIgnored.c10.fail.map(f => f.number), ignored: qcIgnored.ignoredFindings });
+  check('c10: every OTHER non-exempt hit is unaffected', qcIgnored.c10.fail.length === 3 &&
+    ['7-100-0003', '7-100-0004', '3-200-0001'].every(n => qcIgnored.c10.fail.some(f => f.number === n)),
+    qcIgnored.c10.fail.map(f => f.number));
+  check('runChecks(im) with no opts behaves exactly as before (backward compatible)',
+    imQc.runChecks(im).c10.fail.length === 4 && imQc.runChecks(im).ignoredFindings.length === 0);
+}
+
+console.log('\n== synthetic: Ignore List "All" reaches c8/c9... except it never does (release-blocking) ==');
+{
+  const aoa = [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'State'],
+    ['MACH-01', '-', 'Main Machine', 'Certified'],
+    ['7-333-00001', '1', 'Sketch part, should never reach here', 'Certified'],
+    ['7-100-0001', '2', 'Obsolete part', 'Obsolete'],
+  ];
+  const im = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => aoa } });
+  const ignoreAll = ignoreListCompare.buildIgnoreIndex({
+    rows: [
+      { number: '7-333-00001', from: 'All', sourceRow: 1 },
+      { number: '7-100-0001', from: 'All', sourceRow: 2 },
+    ],
+  });
+  const qc = imQc.runChecks(im, { isIgnored: ignoreAll.isIgnored });
+  check('c8 still flags the sketch part even though "All" lists it — never ignorable',
+    qc.c8.fail.some(f => f.number === '7-333-00001'), qc.c8.fail.map(f => f.number));
+  check('c9 still flags the obsolete part even though "All" lists it — never ignorable',
+    qc.c9.fail.some(f => f.number === '7-100-0001'), qc.c9.fail.map(f => f.number));
+  check('neither c8 nor c9 contributed anything to ignoredFindings',
+    !qc.ignoredFindings.some(f => f.checkKey === 'c8' || f.checkKey === 'c9'), qc.ignoredFindings);
+}
+
+console.log('\n== synthetic: Ignore List wiring for material / description / virtual parts / LLDBO ==');
+{
+  const ignoreAll = ignoreListCompare.buildIgnoreIndex({
+    rows: [
+      { number: '7-100-MAT-IGNORED', from: 'All', sourceRow: 1 },
+      { number: '7-100-DESC-IGNORED', from: 'All', sourceRow: 2 },
+      { number: 'VIRT-IGNORED', from: 'All', sourceRow: 3 },
+      { number: 'LLDBO-MISS-IGNORED', from: 'All', sourceRow: 4 },
+      { number: 'LLDBO-QTY-IGNORED', from: 'All', sourceRow: 5 },
+    ],
+  });
+  const opts = { isIgnored: ignoreAll.isIgnored };
+
+  // material-compare.js -- part numbers must start with "7-" (isOwnPart) and
+  // not be purchased ("X-999-") to reach the mismatch check at all.
+  const matIm = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Material'],
+    ['7-MACH-01', '-', 'M', ''],
+    ['7-100-MAT-IGNORED', '1', 'Ignored mat part', 'Steel'],
+    ['7-100-MAT-KEPT', '2', 'Kept mat part', 'Steel'],
+  ] } });
+  const matCad = cadLeveledParser.parse([
+    ['Number', 'Material'],
+    ['7-100-MAT-IGNORED', 'Aluminum'],
+    ['7-100-MAT-KEPT', 'Aluminum'],
+  ], { source: 'leveled-sheet' });
+  const matRes = materialCompare.compareMaterial([matCad], matIm, opts);
+  check('material: ignored part dropped from mismatches, kept part still flagged',
+    !matRes.mismatches.some(m => m.number === '7-100-MAT-IGNORED') && matRes.mismatches.some(m => m.number === '7-100-MAT-KEPT'),
+    matRes.mismatches.map(m => m.number));
+  check('material: ignored finding recorded',
+    matRes.ignoredFindings.some(f => f.number === '7-100-MAT-IGNORED' && f.checkKey === 'material'));
+
+  // titledesc-compare.js -- same "7-" / not-purchased requirement.
+  const descIm = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Description (Item,CO)'],
+    ['7-MACH-01', '-', 'M', 'desc'],
+    ['7-100-DESC-IGNORED', '1', 'T', 'Old text'],
+    ['7-100-DESC-KEPT', '2', 'T', 'Old text'],
+  ] } });
+  const descCad = cadLeveledParser.parse([
+    ['Number', 'Description', 'BOM Structure'],
+    ['7-100-DESC-IGNORED', 'New text', 'Normal'],
+    ['7-100-DESC-KEPT', 'New text', 'Normal'],
+  ], { source: 'leveled-sheet' });
+  const descRes = titleDescCompare.compareTitleDescription([descCad], descIm, opts);
+  check('titleDesc: ignored part dropped from mismatches, kept part still flagged',
+    !descRes.mismatches.some(m => m.number === '7-100-DESC-IGNORED') && descRes.mismatches.some(m => m.number === '7-100-DESC-KEPT'),
+    descRes.mismatches.map(m => m.number));
+  check('titleDesc: ignored finding recorded',
+    descRes.ignoredFindings.some(f => f.number === '7-100-DESC-IGNORED' && f.checkKey === 'titleDesc'));
+
+  // virtual-parts.js
+  const virtIm = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => [
+    ['Number', 'Row Order', 'Title (Item,CO)'],
+    ['MACH-01', '-', 'M'],
+    ['VIRT-IGNORED', '1', 'Ignored virtual'],
+    ['VI-KID1', '1.1', 'Kid 1'], ['VI-KID2', '1.2', 'Kid 2'], ['VI-KID3', '1.3', 'Kid 3'],
+    ['VIRT-KEPT', '2', 'Kept virtual'],
+    ['VK-KID1', '2.1', 'Kid 1'], ['VK-KID2', '2.2', 'Kid 2'], ['VK-KID3', '2.3', 'Kid 3'],
+  ] } });
+  const virtCad = cadLeveledParser.parse([
+    ['Number', 'Thumbnail'],
+    ['VIRT-IGNORED', '(NULL)'],
+    ['VIRT-KEPT', '(NULL)'],
+  ], { source: 'leveled-sheet' });
+  const virtRes = virtualParts.detectVirtualParts([virtCad], virtIm, indexItemMaster, opts);
+  check('virtualPart: ignored part dropped from confirmed, kept part still flagged',
+    !virtRes.confirmed.some(v => v.number === 'VIRT-IGNORED') && virtRes.confirmed.some(v => v.number === 'VIRT-KEPT'),
+    virtRes.confirmed.map(v => v.number));
+  check('virtualPart: ignored part also dropped from anchorRows (children fall back to ordinary imOnly findings)',
+    !virtRes.anchorRows.has('VIRT-IGNORED') && virtRes.anchorRows.has('VIRT-KEPT'));
+  check('virtualPart: ignored finding recorded', virtRes.ignoredFindings.some(f => f.number === 'VIRT-IGNORED' && f.checkKey === 'virtualPart'));
+
+  // lldbo-compare.js
+  const lldboIm = itemMasterParser.parse({ SheetNames: ['S'], Sheets: { S: {} } }, { utils: { sheet_to_json: () => [
+    ['Number', 'Row Order', 'Title (Item,CO)', 'Quantity'],
+    ['MACH-01', '-', 'M', '1 Each'],
+    ['LLDBO-QTY-IGNORED', '1', 'T', '1 Each'],
+  ] } });
+  const lldbo = { rows: [
+    { partNo: 'LLDBO-MISS-IGNORED', description: 'missing', qty: 1, qtyText: '1', sourceRow: 2 },
+    { partNo: 'LLDBO-QTY-IGNORED', description: 'qty', qty: 5, qtyText: '5', sourceRow: 3 },
+  ] };
+  const lldboRes = lldboCompare.compareLldbo(lldbo, lldboIm, indexItemMaster, opts);
+  check('lldboMissing: ignored part dropped from missingFromIm',
+    !lldboRes.missingFromIm.some(m => m.number === 'LLDBO-MISS-IGNORED'), lldboRes.missingFromIm.map(m => m.number));
+  check('lldboQty: ignored part dropped from qtyMismatches',
+    !lldboRes.qtyMismatches.some(m => m.number === 'LLDBO-QTY-IGNORED'), lldboRes.qtyMismatches.map(m => m.number));
+  check('lldbo: both ignored findings recorded under their own checkKey',
+    lldboRes.ignoredFindings.some(f => f.number === 'LLDBO-MISS-IGNORED' && f.checkKey === 'lldboMissing') &&
+    lldboRes.ignoredFindings.some(f => f.number === 'LLDBO-QTY-IGNORED' && f.checkKey === 'lldboQty'),
+    lldboRes.ignoredFindings);
 }
 
 console.log('\n== synthetic: findings registry (one primary finding per part) ==');
