@@ -38,7 +38,12 @@
     return String(v).trim().toUpperCase();
   }
 
-  function compareLldbo(lldbo, im, indexItemMaster) {
+  // opts (optional): { isIgnored(pn, checkKey) } from js/ignorelist-compare.js
+  // — filters missingFromIm ('lldboMissing') and qtyMismatches ('lldboQty')
+  // separately, since a part can legitimately be ignored from one but not
+  // the other (e.g. an accepted quantity discrepancy on a part that still
+  // must reach the Item Master).
+  function compareLldbo(lldbo, im, indexItemMaster, opts) {
     const imIndex = indexItemMaster(im);
 
     // Aggregate LLDBO rows by part number — duplicates are summed (e.g. the
@@ -92,14 +97,23 @@
       }
     }
 
+    const ignoredFindings = [];
+    const isIgnored = opts && opts.isIgnored;
+    let filteredMissing = missingFromIm, filteredQty = qtyMismatches;
+    if (isIgnored) {
+      filteredMissing = compareLib.filterIgnoredFlat(missingFromIm, isIgnored, 'lldboMissing', ignoredFindings);
+      filteredQty = compareLib.filterIgnoredFlat(qtyMismatches, isIgnored, 'lldboQty', ignoredFindings);
+    }
+
     return {
       totalLldboItems: byPn.size,
       noPartNumberCount: noPartNumber,
-      missingFromIm: missingFromIm,
-      qtyMismatches: qtyMismatches,
+      missingFromIm: filteredMissing,
+      qtyMismatches: filteredQty,
       projectKeyMismatch: (lldbo.projectKey && im.projectKey && lldbo.projectKey.pn !== im.projectKey.pn)
         ? { lldbo: lldbo.projectKey, im: im.projectKey }
         : null,
+      ignoredFindings: ignoredFindings,
     };
   }
 

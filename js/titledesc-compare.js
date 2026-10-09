@@ -30,12 +30,12 @@
  */
 (function (root, factory) {
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = factory(require('./imqc.js').imQc);
+    module.exports = factory(require('./imqc.js').imQc, require('./compare.js'));
   } else {
     const bc = root.BOMCompare || {};
-    root.BOMCompare = Object.assign(bc, factory(bc.imQc));
+    root.BOMCompare = Object.assign(bc, factory(bc.imQc, bc));
   }
-})(typeof self !== 'undefined' ? self : this, function (imQc) {
+})(typeof self !== 'undefined' ? self : this, function (imQc, compareLib) {
   'use strict';
 
   // Case-insensitive, whitespace removed. Everything else is significant.
@@ -117,7 +117,9 @@
   }
 
   // cadSources: the array passed to compareAll (0-2 CAD sources).
-  function compareTitleDescription(cadSources, im) {
+  // opts (optional): { isIgnored(pn, checkKey) } from js/ignorelist-compare.js
+  // — filters `mismatches` only; `autoMatched` was never a finding.
+  function compareTitleDescription(cadSources, im, opts) {
     var cad = cadDescriptionByPn(cadSources || []);
     if (!cad) {
       return {
@@ -162,12 +164,17 @@
       }
     }
 
+    var ignoredFindings = [];
+    var isIgnored = opts && opts.isIgnored;
+    if (isIgnored) mismatches = compareLib.filterIgnoredFlat(mismatches, isIgnored, 'titleDesc', ignoredFindings);
+
     return {
       applicable: true,
       cadSourceFileName: cad.source.fileName || '',
       autoMatched: autoMatched,
       eligibleCount: eligible,
       mismatches: mismatches,
+      ignoredFindings: ignoredFindings,
     };
   }
 
